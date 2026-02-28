@@ -154,7 +154,7 @@ maze/
 
 **1. Clone or download the project:**
 ```bash
-git clone https://github.com/your-username/maze.git
+git clone https://github.com/Lucifer-cell-metrix/maze.git
 cd maze
 ```
 
