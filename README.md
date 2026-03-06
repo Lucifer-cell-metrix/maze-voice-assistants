@@ -5,303 +5,115 @@
   <img src="https://img.shields.io/badge/AI-Gemini%20Powered-4285F4?style=for-the-badge&logo=google&logoColor=white" alt="Gemini"/>
 </p>
 
-<h1 align="center">🧠 MAZE — Your Personal AI Desktop Assistant</h1>
+<h1 align="center">🧠 MAZE — Your Advanced AI Desktop Assistant</h1>
 
 <p align="center">
-  <b>A voice-controlled AI assistant for Windows — inspired by JARVIS from Iron Man.</b><br/>
-  Powered by Google Gemini AI with a fully functional offline fallback brain.
+  <b>A powerful, voice-controlled AI assistant for Windows — inspired by JARVIS.</b><br/>
+  Featuring <b>Offline Speech Recognition</b>, <b>Telegram Remote Control</b>, and <b>Smart Code Generation</b>.
 </p>
 
 ---
 
-## ✨ What is MAZE?
+## ✨ New in MAZE (Latest Updates)
 
-**MAZE** is a personal AI desktop assistant that listens to your voice (or keyboard) and performs real actions on your computer. It can open apps, search the web, play music, manage tasks, take notes, control system volume/brightness, do math, motivate you, and even crack coding jokes — all hands-free.
-
-It works **100% offline** with a smart command engine, and automatically upgrades to **Google Gemini AI** when an API key is available for natural language conversations.
-
----
-
-## 🚀 Features
-
-### 🎙️ Voice & Keyboard Input
-- **Voice Mode** — Speak naturally; MAZE uses Google Speech Recognition to understand you.
-- **Keyboard Mode** — Type commands when you don't have a mic or prefer typing.
-- **Seamless Switching** — Say `"switch"` to toggle between voice and keyboard anytime.
-
-### 🖥️ App Launcher
-Open **30+ Windows applications** by name:
-| Category | Apps |
-|----------|------|
-| **Productivity** | Notepad, VS Code, Word, Excel, PowerPoint, Outlook |
-| **System** | File Explorer, Task Manager, CMD, PowerShell, Settings |
-| **Browsers** | Chrome, Brave, Edge, Firefox |
-| **Creative** | Paint, Snipping Tool, Camera, Photos |
-| **Others** | Calculator, Calendar, Clock, Maps, Store, Xbox |
-
-> 💡 Just say: *"Open VS Code"*, *"Launch Chrome"*, or even just *"Notepad"*
-
-### 🌐 Website Opener
-Instantly open **25+ popular websites** with a single command:
-
-- **Social** — Instagram, Twitter, LinkedIn, Facebook, Reddit, Snapchat, Pinterest, Threads
-- **Communication** — WhatsApp, Telegram, Discord, Gmail
-- **AI Tools** — ChatGPT, Gemini, Claude
-- **Entertainment** — Spotify, Netflix, Hotstar, Prime Video
-- **Shopping** — Amazon, Flipkart, Myntra
-- **Dev Tools** — GitHub, Stack Overflow, LeetCode, GeeksforGeeks
-- **Productivity** — Google Drive, Google Docs, Notion, Canva, Figma
-- **Learning** — Udemy, Coursera, W3Schools
-
-> 💡 Just say: *"Open GitHub"*, *"Open WhatsApp"*, or *"Instagram"*
-
-### 🎵 YouTube & Music
-- **Play music** — *"Play Bohemian Rhapsody"* → auto-plays the first YouTube video.
-- **Search YouTube** — *"Search Python tutorial on YouTube"* → opens search results only.
-- Works even without saying "YouTube" — *"Play lo-fi beats"* goes straight to YouTube.
-
-### 🔍 Web Search
-- **Google Search** — *"Search how to learn Python"*
-- **Wikipedia** — *"Wikipedia Albert Einstein"*
-- **Learning Mode** — *"Teach me JavaScript"* → opens tutorial search results.
-
-### 📝 Task Manager
-- **Add tasks** — *"Add task finish homework"*
-- **View tasks** — *"Show my tasks"*
-- **Complete tasks** — *"Complete task 1"*
-- **Clear all** — *"Clear tasks"*
-- Tasks are saved to `memory/tasks.json` and persist across sessions.
-
-### 📒 Note-Taking
-- **Take notes** — *"Note down buy groceries tomorrow"*
-- **View notes** — *"Show my notes"* → opens in Notepad automatically.
-- **Clear notes** — *"Clear notes"*
-- Notes are saved to `memory/notes.txt` with timestamps.
-
-### 🔊 System Controls
-| Command | Action |
-|---------|--------|
-| *"Volume up"* / *"Louder"* | Increase volume |
-| *"Volume down"* / *"Quieter"* | Decrease volume |
-| *"Mute"* / *"Unmute"* | Toggle mute |
-| *"Max volume"* | Set volume to 100% |
-| *"Brightness up"* / *"Brighter"* | Increase brightness |
-| *"Brightness down"* / *"Dimmer"* | Decrease brightness |
-| *"Set brightness to 50"* | Set exact brightness level |
-
-### 🧮 Math Calculator
-- Natural language math: *"Calculate 25 times 4"*, *"What is 100 divided by 7"*
-- Supports: `+`, `-`, `×`, `÷`, `power`, `mod`
-- Say *"Open calculator"* to launch the Windows Calculator app instead.
-
-### 💪 Motivation & Fun
-- **Motivational quotes** — *"Motivate me"*, *"I feel lazy"*
-- **Coding jokes** — *"Tell me a joke"*
-- **Status check** — *"How are you?"*
-- **Time & Date** — *"What time is it?"*, *"What day is today?"*
-
-### 🤖 AI Brain (Dual Mode)
-| Mode | Description |
-|------|-------------|
-| **Gemini AI** | Natural conversations powered by Google Gemini (2.0 Flash Lite → 2.0 Flash → 1.5 Flash fallback chain) |
-| **Offline Brain** | Smart pattern-matching engine that handles all core features without internet |
-
-> MAZE automatically falls back to offline mode if the API is unavailable — you never lose functionality.
+- **🎙️ Offline Speech Recognition** — Uses **Vosk** to understand voice even when internet is down.
+- **📱 Telegram Integration** — Control MAZE from your phone! Send commands via Telegram bot.
+- **💻 Smart Code Writer** — Ask MAZE to *"Write Python code for a calculator"* and it saves `.py` files and opens them in VS Code.
+- **🗣️ Interruptible Speech** — Speak mid-sentence or say *"Stop"* to interrupt MAZE. It now listens while it speaks!
+- **⏯️ Full Media Control** — Pause, Resume, Next, and Previous track support for YouTube and system media.
+- **🚀 Auto-Start on Boot** — Configure MAZE to start automatically when you turn on your PC.
 
 ---
 
-## 📁 Project Structure
+## 🚀 Key Features
 
-```
-maze/
-├── main.py                  # 🚀 Entry point — voice/keyboard loop + speech engine
-├── config.py                # ⚙️ Configuration (API keys, voice settings, memory)
-├── requirements.txt         # 📦 Python dependencies
-├── .env.example             # 🔐 Environment variable template
-├── test_mic.py              # 🎤 Microphone testing utility
-│
-├── assistant/
-│   ├── __init__.py
-│   ├── brain.py             # 🧠 Core AI brain — command routing, Gemini, offline logic
-│   ├── voice_input.py       # 🎙️ Voice input module
-│   ├── voice_output.py      # 🔊 Voice output module
-│   └── skills/
-│       ├── __init__.py
-│       ├── files.py          # 📂 File management (list, create, search, delete)
-│       ├── system.py         # 💻 System control (apps, time, date)
-│       └── web.py            # 🌐 Web search (Google, YouTube, Wikipedia)
-│
-├── memory/
-│   ├── __init__.py
-│   ├── context.py            # 🧠 Conversation memory (rolling history)
-│   ├── tasks.json            # ✅ Persistent task storage
-│   └── notes.txt             # 📒 Saved notes (created at runtime)
-│
-└── logs/
-    └── assistant.log         # 📋 Activity log
-```
+### 🎙️ Advanced Voice Control
+- **Multimodal Input** — Voice or Keyboard. Say `"switch"` to toggle.
+- **Non-Blocking Logic** — MAZE listens while it speaks. Interrupt it anytime with a new command.
+- **Proactive Offline Model** — Automatically switches to **Vosk** offline brain if internet is disconnected.
+
+### 📱 Telegram Bot (Remote Access)
+Control your PC from anywhere using Telegram:
+- Send messages to your bot, and MAZE executes them on your desktop.
+- Secure access via `TELEGRAM_ALLOWED_USERS` list.
+- Get status updates or stop MAZE remotely.
+
+### 💻 Code Generation & Automation
+- **Write Code** — Generates scripts using Gemini, saves them to `generated_code/`, and launches VS Code.
+- **Note-Taking** — *"Note down buy milk"* saves to `notes.txt` and opens it for you.
+- **Task Management** — Full persistent task list handling.
+
+### 🖥️ Desktop & Media Mastery
+- **App Launcher** — Launch 30+ apps (VS Code, Chrome, WhatsApp, etc.).
+- **Media Controller** — Full control over YouTube/Spotify (Play, Pause, Next, Previous).
+- **System Control** — Volume and Brightness control by voice.
 
 ---
 
-## 🛠️ Installation
+## 🛠️ Installation & Setup
 
-### Prerequisites
-- **Python 3.8+** installed ([Download](https://www.python.org/downloads/))
-- **Windows 10/11** (uses Windows-specific APIs for volume, brightness, and app launching)
-- A working **microphone** (optional — keyboard mode available)
+### 1. Prerequisites
+- **Python 3.8+** on Windows 10/11.
+- A **Gemini API Key** (Free from [Google AI Studio](https://aistudio.google.com)).
+- Optional: **Telegram Bot Token** (From [@BotFather](https://t.me/botfather)).
 
-### Steps
-
-**1. Clone or download the project:**
+### 2. Install Dependencies
 ```bash
-git clone https://github.com/Lucifer-cell-metrix/maze.git
+git clone https://github.com/Lucifer-cell-metrix/maze-voice-assistants.git
 cd maze
-```
-
-**2. Install dependencies:**
-```bash
 pip install -r requirements.txt
 ```
 
-**3. Set up your API key (optional but recommended):**
+### 3. Setup Offline Voice (Vosk)
+To enable offline speech recognition:
+1. Download a model from [Vosk Models](https://alphacephei.com/vosk/models) (suggested: `vosk-model-small-en-us-0.15`).
+2. Extract it to a folder named `vosk-model` inside the project directory.
+
+### 4. Configuration (.env)
+Create a `.env` file (see `.env.example`):
+```env
+GEMINI_API_KEY=your_key_here
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+```
+Update `config.py` with your `TELEGRAM_ALLOWED_USERS` (your numeric Telegram ID).
+
+---
+
+## 🎮 Command Guide
+
+| Feature | Commands |
+|---------|----------|
+| **AI Conversation** | *"Who is Elon Musk?"*, *"Explain Quantum Physics"* |
+| **Media Control** | *"Pause video"*, *"Next track"*, *"Play Saiyaara"* |
+| **Automation** | *"Write a Python script for a clock"*, *"Note buy groceries"* |
+| **System** | *"Volume up"*, *"Set brightness to 80"*, *"Open VS Code"* |
+| **Tasks** | *"Add task finish project"*, *"Show my tasks"* |
+| **Control** | *"Stop"*, *"Hey stop"*, *"Switch mode"*, *"Exit"* |
+
+---
+
+## ⚙️ Auto-Start Setup
+To make MAZE start when your PC turns on, run:
 ```bash
-copy .env.example .env
+python setup_autostart.py --enable
 ```
-Edit the `.env` file and add your Google Gemini API key:
-```
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-> Get a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey)
-
-**4. Test your microphone (optional):**
-```bash
-python test_mic.py
-```
-This will list available microphones. Update `MIC_INDEX` in `main.py` if needed.
-
-**5. Run MAZE:**
-```bash
-python main.py
-```
+You can disable it anytime with `--disable`.
 
 ---
 
-## 🎮 Quick Start Commands
-
-Once MAZE is running, try these:
-
-```
-"Hey MAZE"                    → Greeting
-"Open Chrome"                 → Launch Google Chrome
-"Open WhatsApp"               → Open WhatsApp Web
-"Play Shape of You"           → Play on YouTube
-"Search Python tutorial"      → Google search
-"Add task complete project"   → Add a task
-"Show my tasks"               → View pending tasks
-"Note down call mom at 6pm"   → Save a note + open in Notepad
-"Volume up"                   → Increase system volume
-"Calculate 15 times 8"        → Quick math
-"Motivate me"                 → Inspirational quote
-"Tell me a joke"              → Coding humor
-"What time is it?"            → Current time
-"Switch"                      → Toggle voice ↔ keyboard
-"Goodbye"                     → Shut down MAZE
-```
+## 📦 Project Structure
+- `main.py`: The heart of MAZE. Handles the main loop and speech.
+- `assistant/brain.py`: The logic center. Routes commands to skills.
+- `assistant/telegram_bot.py`: Handles remote Telegram commands.
+- `setup_autostart.py`: Easy Windows boot configuration.
+- `vosk-model/`: Place your offline voice models here.
+- `generated_code/`: Where MAZE saves the code it writes for you.
 
 ---
 
-## ⚙️ Configuration
-
-All settings are in **`config.py`**:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `ASSISTANT_NAME` | `"MAZE"` | Name of the assistant |
-| `VOICE_RATE` | `175` | Speech speed (words per minute) |
-| `VOICE_VOLUME` | `1.0` | Speech volume (0.0 – 1.0) |
-| `AI_PROVIDER` | `"gemini"` | AI provider: `"gemini"`, `"openai"`, or `"offline"` |
-| `MAX_MEMORY_TURNS` | `10` | Number of past messages to remember |
-| `ENABLE_LOGGING` | `True` | Enable/disable activity logging |
+## 📄 License & Credits
+Built with ❤️ and Python. Powered by **Google Gemini**.
+Open Source under **MIT License**.
 
 ---
-
-## 📦 Dependencies
-
-| Package | Purpose |
-|---------|---------|
-| `SpeechRecognition` | Voice-to-text via Google Speech API |
-| `pyttsx3` | Text-to-speech (offline, uses Windows SAPI) |
-| `PyAudio` | Microphone input stream |
-| `google-generativeai` | Google Gemini AI integration |
-| `openai` | OpenAI GPT integration (optional) |
-| `python-dotenv` | Load environment variables from `.env` |
-| `requests` | HTTP requests (YouTube video lookup) |
-
----
-
-## 🧩 How It Works
-
-```
-┌─────────────────────────────────────────────────┐
-│                    USER INPUT                    │
-│            (Voice 🎙️  or  Keyboard ⌨️)           │
-└─────────────────┬───────────────────────────────┘
-                  │
-                  ▼
-┌─────────────────────────────────────────────────┐
-│               COMMAND ROUTER                     │
-│          (assistant/brain.py)                     │
-│                                                  │
-│  1. Greetings & Identity                         │
-│  2. YouTube / Play Music                         │
-│  3. Open Apps & Websites                         │
-│  4. Web Search (Google / Wikipedia)              │
-│  5. Task Management                              │
-│  6. Note-Taking                                  │
-│  7. System Controls (Volume / Brightness)        │
-│  8. Math Calculator                              │
-│  9. Motivation & Jokes                           │
-│  10. Learning Resources                          │
-│  11. Gemini AI (fallback for unknown queries)    │
-└─────────────────┬───────────────────────────────┘
-                  │
-                  ▼
-┌─────────────────────────────────────────────────┐
-│                VOICE RESPONSE                    │
-│         (pyttsx3 — Zira voice 🔊)                │
-└─────────────────────────────────────────────────┘
-```
-
----
-
-## 🛡️ Privacy & Security
-
-- **No data collection** — MAZE runs entirely on your machine.
-- **API keys stay local** — Stored in your `.env` file, never transmitted elsewhere.
-- **Offline capable** — Works without internet using the smart offline brain.
-- **Open source** — Full transparency, inspect every line of code.
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Here's how:
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m "Add amazing feature"`
-4. Push to the branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-This project is open source and available under the [MIT License](LICENSE).
-
----
-
-<p align="center">
-  <b>Built with ❤️ and Python</b><br/>
-  <i>"The only limit is your imagination."</i>
-</p>
+<p align="center"><i>"The only limit is your imagination."</i></p>
