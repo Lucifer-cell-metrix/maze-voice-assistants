@@ -129,6 +129,7 @@ APPS = {
     "maps":            "bingmaps:",
     "store":           "ms-windows-store:",
     "xbox":            "xbox:",
+    "telegram":        "tg://",
 }
 
 # Browser paths to try on Windows
@@ -181,7 +182,7 @@ def _open_app(app_name: str) -> str:
         if len(key) <= 4:
             if _has_word(app_name, [key]):
                 try:
-                    if "ms-" in exe:
+                    if ":" in exe:
                         os.startfile(exe)
                     else:
                         subprocess.Popen(exe, shell=True)
@@ -191,7 +192,8 @@ def _open_app(app_name: str) -> str:
         else:
             if key in app_name:
                 try:
-                    if "ms-" in exe:
+                    # Use startfile for protocols (ms-settings:, tg://, etc.) or executables
+                    if ":" in exe:
                         os.startfile(exe)
                     else:
                         subprocess.Popen(exe, shell=True)
@@ -213,7 +215,6 @@ WEBSITES = {
     "email":           "https://mail.google.com",
     "mail":            "https://mail.google.com",
     "whatsapp":        "https://web.whatsapp.com",
-    "telegram":        "https://web.telegram.org",
     "discord":         "https://discord.com/app",
     # Social Media
     "instagram":       "https://instagram.com",
