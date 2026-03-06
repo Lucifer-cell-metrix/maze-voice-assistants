@@ -11,6 +11,8 @@ from config import AI_PROVIDER, GEMINI_API_KEY, MAX_MEMORY_TURNS
 # Conversation memory
 _memory = []
 _gemini_failed_count = 0
+_gemini_last_fail_time = 0     # Timestamp of last Gemini failure
+GEMINI_COOLDOWN = 300          # 5 minutes cooldown after rate limit (free tier resets)
 _tasks = []
 
 # ── Task file for persistence ────────────────────────
@@ -405,11 +407,18 @@ NOTES_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "memory", 
 def _handle_notes(command: str) -> str:
     """Handle note-taking and message typing."""
 
-    # Note down / Write / Type message
-    if _contains_any(command, ["note down", "note this", "write down", "write this",
+    # Note down / Write / Type message — also match "note [content]" directly
+    is_note_cmd = _contains_any(command, ["note down", "note this", "write down", "write this",
                                 "type message", "type this", "take note", "make note",
                                 "remember this", "remember that", "save note",
-                                "jot down", "write note"]):
+                                "jot down", "write note"])
+
+    # Also match "note [something]" — but NOT "notepad", "show notes", etc.
+    if not is_note_cmd and command.startswith("note ") and not _contains_any(command, [
+            "notepad", "show note", "clear note", "delete note", "my note", "read note", "view note"]):
+        is_note_cmd = True
+
+    if is_note_cmd:
         # Extract the note content
         note = command
         for remove in ["note down", "note this", "write down", "write this",
@@ -417,6 +426,9 @@ def _handle_notes(command: str) -> str:
                         "remember this", "remember that", "save note",
                         "jot down", "write note", "please", "that"]:
             note = note.replace(remove, " ")
+        # If it was just "note [content]", strip the "note" prefix
+        if note.strip().startswith("note "):
+            note = note.strip()[5:]
         note = " ".join(note.split()).strip()
 
         if note:
@@ -435,7 +447,7 @@ def _handle_notes(command: str) -> str:
                 pass
 
             return f"Got it. Noted down: {note}. Opening in Notepad."
-        return "What do you want me to note down? Say 'note down' followed by your message."
+        return "What do you want me to note down? Say 'note' followed by your message."
 
     # Show notes
     if _contains_any(command, ["show note", "show notes", "my notes", "read notes",
@@ -450,8 +462,8 @@ def _handle_notes(command: str) -> str:
                     count = len(lines)
                     last_note = lines[-1].strip()
                     return f"You have {count} notes. Latest: {last_note}. Opening in Notepad."
-                return "No notes yet. Say 'note down' followed by your message to start."
-            return "No notes yet. Say 'note down' followed by your message to start."
+                return "No notes yet. Say 'note' followed by your message to start."
+            return "No notes yet. Say 'note' followed by your message to start."
         except:
             return "Couldn't read notes file."
 
@@ -518,6 +530,10 @@ def _set_brightness(level):
 
 def _handle_system_control(command: str) -> str:
     """Handle volume and brightness control."""
+    # Strip filler words so "decrease the volume" → "decrease volume"
+    for filler in [" the ", " a ", " my ", " please "]:
+        command = command.replace(filler, " ")
+    command = " ".join(command.split())  # Clean extra spaces
 
     # ── Volume Controls ──
     if _contains_any(command, ["volume up", "increase volume", "louder",
@@ -609,6 +625,98 @@ def _handle_system_control(command: str) -> str:
 
     return None
 
+# ── Code Writing ─────────────────────────────────────
+
+CODE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "generated_code")
+
+def _handle_code_writing(command: str) -> str:
+    """Generate code using Gemini AI and save to a file."""
+    if not (AI_PROVIDER == "gemini" and GEMINI_API_KEY):
+        return "I need the Gemini AI connection to write code. Please check your API key."
+
+    # Extract what code to write
+    code_request = command
+    for remove in ["write code", "write a code", "create code", "create a code",
+                    "code for", "generate code", "make code", "make a code",
+                    "write program", "write a program", "create program",
+                    "write script", "write a script", "create script",
+                    "for me", "please", "that"]:
+        code_request = code_request.replace(remove, " ")
+    code_request = " ".join(code_request.split()).strip()
+
+    if not code_request:
+        return "What code do you want me to write? Say 'write code for' followed by what you need."
+
+    try:
+        from google import genai
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+        prompt = (
+            f"Write clean, well-commented code for: {code_request}. "
+            "Provide ONLY the code, no explanations before or after. "
+            "Include comments in the code to explain what each part does. "
+            "Detect the best programming language for this task. "
+            "Start the first line with a comment indicating the language, e.g. # Python or // JavaScript"
+        )
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config={
+                "max_output_tokens": 2000,
+                "temperature": 0.3,
+            }
+        )
+
+        code = response.text.strip()
+        # Remove markdown code fences if present
+        if code.startswith("```"):
+            lines = code.split("\n")
+            lang_line = lines[0].replace("```", "").strip()
+            code = "\n".join(lines[1:])
+            if code.endswith("```"):
+                code = code[:-3].strip()
+
+        # Determine file extension from first line or language
+        ext_map = {
+            "python": ".py", "javascript": ".js", "java": ".java",
+            "c++": ".cpp", "cpp": ".cpp", "c": ".c", "html": ".html",
+            "css": ".css", "rust": ".rs", "go": ".go", "ruby": ".rb",
+            "php": ".php", "typescript": ".ts", "bash": ".sh",
+            "shell": ".sh", "sql": ".sql", "swift": ".swift",
+            "kotlin": ".kt", "r": ".r",
+        }
+        ext = ".py"  # default
+        first_line = code.split("\n")[0].lower() if code else ""
+        for lang, e in ext_map.items():
+            if lang in first_line or (lang_line and lang in lang_line.lower()):
+                ext = e
+                break
+
+        # Save code to file
+        os.makedirs(CODE_DIR, exist_ok=True)
+        safe_name = re.sub(r'[^\w\s-]', '', code_request)[:40].strip().replace(' ', '_')
+        filename = f"{safe_name}{ext}"
+        filepath = os.path.join(CODE_DIR, filename)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        # Try to open in VS Code, fallback to Notepad
+        try:
+            subprocess.Popen(["code", filepath], shell=True)
+        except:
+            try:
+                subprocess.Popen(["notepad.exe", filepath])
+            except:
+                pass
+
+        return f"Done! I wrote {code_request} code and saved it as {filename}. Opening it now."
+
+    except Exception as e:
+        return f"Sorry, I couldn't generate code right now. Error: {str(e)[:60]}"
+
+
 # ── Math Calculator ──────────────────────────────────
 
 def _handle_math(command: str) -> str:
@@ -638,7 +746,19 @@ def _handle_math(command: str) -> str:
     expr = ''.join(c for c in expr if c in '0123456789.+-*/() %')
     expr = expr.strip()
 
+    # Strip leading/trailing operators (from incomplete speech like "254 times" or "times 4")
+    expr = expr.strip('+-*/% ')
+
     if expr and any(c.isdigit() for c in expr):
+        # Check if expression has at least 2 numbers and an operator
+        numbers = re.findall(r'\d+\.?\d*', expr)
+        has_operator = any(op in expr for op in ['+', '-', '*', '/', '%', '**'])
+
+        if len(numbers) < 2 or not has_operator:
+            # Incomplete expression — ask for clarification
+            num = numbers[0] if numbers else expr
+            return f"I heard '{command}'. Did you mean something like '{num} times 4' or '{num} plus 10'? Give me the full calculation."
+
         try:
             result = eval(expr)
             # Format nicely
@@ -811,21 +931,32 @@ def smart_offline_response(command: str) -> str:
             return f"Searching for {query} tutorials."
         return "What tutorial are you looking for?"
 
-    # ── Default ─────────────────────────────
-    return (f"I heard: '{command}'. I'm not sure what to do with that. "
-            "Try commands like: open notepad, search python, add task, "
-            "calculate 25 times 4, tell me a joke, or motivate me!")
+    # ── Default: search Google for unknown questions ──
+    # If it looks like a question or topic, search Google instead of giving up
+    question_words = ["who", "what", "where", "when", "why", "how", "is", "are",
+                      "was", "were", "do", "does", "did", "can", "could", "will",
+                      "would", "should", "tell me", "define", "meaning"]
+    first_word = command.split()[0] if command.split() else ""
+    if first_word in question_words or _contains_any(command, ["tell me about", "tell me", "who is", "what is"]):
+        query = command
+        url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
+        webbrowser.open(url)
+        return f"I'm offline right now, so let me search that for you. Opening Google for: {query}"
+
+    return (f"I heard: '{command}'. I'm not sure what to do with that offline. "
+            "Try: open notepad, search python, add task, calculate 25 times 4, "
+            "tell me a joke, or motivate me! For questions, I need internet for my AI brain.")
 
 
 # ── Gemini Response Engine ────────────────────────────
 MODELS_TO_TRY = [
-    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-flash",
+    "gemini-2.0-flash-lite",
 ]
 
 def _gemini_response(command: str) -> str:
-    global _gemini_failed_count
+    global _gemini_failed_count, _gemini_last_fail_time
     try:
         from google import genai
         client = genai.Client(api_key=GEMINI_API_KEY)
@@ -834,8 +965,12 @@ def _gemini_response(command: str) -> str:
         system_instruction = (
             "You are MAZE, an advanced AI assistant inspired by JARVIS from Iron Man. "
             "Intelligent, calm, professional, friendly, and motivating. "
-            "Keep responses BRIEF for voice. No markdown or formatting. "
-            "Max 2-3 sentences unless asked for detail."
+            "Keep responses concise but COMPLETE — always finish your sentences. "
+            "Give 3-5 sentence answers. No markdown or formatting. "
+            "Never cut off mid-thought. "
+            "NEVER include raw code in your responses — if asked for code, "
+            "describe what the code does in plain English instead. "
+            "Your responses will be spoken aloud, so keep them natural and conversational."
         )
 
         last_error = None
@@ -846,7 +981,7 @@ def _gemini_response(command: str) -> str:
                     contents=_memory[-MAX_MEMORY_TURNS:],
                     config={
                         "system_instruction": system_instruction,
-                        "max_output_tokens": 200,
+                        "max_output_tokens": 500,
                         "temperature": 0.7,
                     }
                 )
@@ -856,23 +991,154 @@ def _gemini_response(command: str) -> str:
                 return reply
             except Exception as e:
                 last_error = str(e)
+                # Rate limited — don't bother trying other models
                 if "429" in last_error or "RESOURCE_EXHAUSTED" in last_error:
+                    _gemini_failed_count = 3  # Immediately trigger cooldown
+                    _gemini_last_fail_time = time.time()
+                    _memory.pop()
+                    print(f"   ⚠️  Gemini API rate limited. Using offline brain for {GEMINI_COOLDOWN // 60} minutes.")
+                    return smart_offline_response(command)
+                # Model not found — try next model
+                elif "404" in last_error or "NOT_FOUND" in last_error:
+                    print(f"   ⚠️  Model {model_name} not found, trying next...")
                     continue
                 else:
                     break
 
         _gemini_failed_count += 1
+        _gemini_last_fail_time = time.time()
         _memory.pop()
+        print(f"   ⚠️  Gemini AI unavailable — using offline brain. (Error: {last_error[:80] if last_error else 'unknown'})")
         return smart_offline_response(command)
 
-    except Exception:
+    except Exception as e:
         _gemini_failed_count += 1
+        _gemini_last_fail_time = time.time()
+        print(f"   ⚠️  Gemini AI unavailable — using offline brain. (Error: {str(e)[:80]})")
         return smart_offline_response(command)
+
+
+# ── Action Handler (runs commands that DO things) ─────
+def _try_actions(command: str) -> str:
+    """Try to execute actionable commands (apps, websites, music, tasks, etc.).
+    Returns response if an action was taken, None if no action matched."""
+    cmd = _normalize_command(command)
+
+    # ── YouTube / Play (HIGHEST PRIORITY) ───
+    if "youtube" in cmd or _has_word(cmd, ["play"]):
+        result = _handle_search(cmd)
+        if result:
+            return result
+
+    # ── Open commands ───────────────────────
+    if _contains_any(cmd, ["open", "launch", "start", "run"]):
+        # Check for web searches first
+        result = _handle_search(cmd)
+        if result:
+            return result
+        # Then websites
+        result = _open_website(cmd)
+        if result:
+            return result
+        # Then apps
+        app_query = cmd
+        for remove in ["open", "launch", "start", "run"]:
+            app_query = app_query.replace(remove, " ")
+        app_query = app_query.strip()
+        result = _open_app(app_query)
+        if result:
+            return result
+
+    # ── Direct app name (without "open") ────
+    for app_name in list(APPS.keys()) + list(BROWSER_APPS.keys()):
+        if app_name in cmd and len(cmd.split()) <= 3:
+            result = _open_app(cmd)
+            if result:
+                return result
+
+    # ── Web searches ────────────────────────
+    if _contains_any(cmd, ["search", "google", "look up", "find", "wikipedia", "wiki"]):
+        result = _handle_search(cmd)
+        if result:
+            return result
+
+    # ── Website opening ─────────────────────
+    result = _open_website(cmd)
+    if result:
+        return result
+
+    # ── Task management ─────────────────────
+    result = _handle_tasks(cmd)
+    if result:
+        return result
+
+    # ── Note-taking / Type message ───────────
+    result = _handle_notes(cmd)
+    if result:
+        return result
+
+    # ── System control (volume/brightness) ───
+    result = _handle_system_control(cmd)
+    if result:
+        return result
+
+    # ── Code writing ─────────────────────────
+    # Flexible matching: if command has an action word + "code"/"program"/"script"
+    _code_actions = {"write", "create", "make", "generate", "build", "code"}
+    _code_nouns = {"code", "program", "script"}
+    cmd_words = set(cmd.split())
+    has_code_action = bool(cmd_words & _code_actions)
+    has_code_noun = bool(cmd_words & _code_nouns)
+    # Also match exact phrases
+    has_exact = _contains_any(cmd, ["write code", "create code", "code for", "generate code",
+                                     "make code", "write program", "create program",
+                                     "write script", "create script"])
+    # Trigger if (action + noun) OR exact phrase, but NOT "vs code" alone / "open code"
+    is_code_request = (has_exact or (has_code_action and has_code_noun)) \
+                       and not (cmd.strip() in ["vs code", "open vs code", "open code", "launch code"])
+    if is_code_request:
+        result = _handle_code_writing(cmd)
+        if result:
+            return result
+
+    # ── Math ────────────────────────────────
+    if _contains_any(cmd, ["calculate", "what is", "what's", "how much",
+                                "plus", "minus", "times", "divided", "multiply",
+                                "add", "subtract", "solve", " x "]):
+        result = _handle_math(cmd)
+        if result:
+            return result
+
+    # No actionable command matched
+    return None
 
 
 # ── Main Router ───────────────────────────────────────
 def get_response(command: str) -> str:
-    """Route to Gemini if available, otherwise smart offline."""
+    """Try actions first (they actually DO things), then use AI for conversation."""
+    global _gemini_failed_count
+
+    # ── STEP 1: Always try actionable commands first ──
+    # These actually open apps, play music, manage tasks, etc.
+    action_result = _try_actions(command)
+    if action_result:
+        return action_result
+
+    # ── STEP 2: No action matched → use AI for conversation/questions ──
+    # If Gemini has been failing, check if cooldown period has passed
+    if _gemini_failed_count >= 3:
+        elapsed = time.time() - _gemini_last_fail_time
+        remaining = GEMINI_COOLDOWN - elapsed
+        if remaining <= 0:
+            _gemini_failed_count = 0  # Reset — give Gemini another chance
+            print("   🔄 Retrying Gemini AI connection...")
+        else:
+            mins = int(remaining // 60)
+            secs = int(remaining % 60)
+            # Only show cooldown message occasionally (not every single command)
+            if elapsed < 5:  # Just entered cooldown
+                print(f"   ⏳ Gemini AI on cooldown. Retrying in {mins}m {secs}s. Using offline brain.")
+
     if AI_PROVIDER == "gemini" and GEMINI_API_KEY and _gemini_failed_count < 3:
         return _gemini_response(command)
     else:

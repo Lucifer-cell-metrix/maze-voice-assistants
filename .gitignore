@@ -26,3 +26,9 @@ Desktop.ini
 
 # Notes
 notes/
+
+# Vosk offline speech model (large, ~50MB+)
+vosk-model/
+
+# Generated code output
+generated_code/
