@@ -49,10 +49,10 @@ def _speak_worker(text: str):
     except Exception as e:
         _current_engine = None
 
-def speak(text: str):
+def speak(text: str, wait=False):
     """Convert text to speech and print to console.
-    NON-BLOCKING: starts speech in background, returns immediately.
-    Speech is auto-stopped when user gives the next command."""
+    wait=False (default): starts speech in background, returns immediately.
+    wait=True: blocks until speech is finished."""
     global _speech_thread, _stop_speaking
     if not RUNNING:
         return
@@ -61,10 +61,13 @@ def speak(text: str):
     # Stop any ongoing speech first
     stop_speaking()
 
-    # Start new speech in background — MAZE listens while talking
+    # Start new speech
     _stop_speaking = False
-    _speech_thread = threading.Thread(target=_speak_worker, args=(text,), daemon=True)
-    _speech_thread.start()
+    if wait:
+        _speak_worker(text)
+    else:
+        _speech_thread = threading.Thread(target=_speak_worker, args=(text,), daemon=True)
+        _speech_thread.start()
 
 def stop_speaking():
     """Interrupt current speech immediately by killing the engine."""
@@ -393,7 +396,7 @@ def run():
     global INPUT_MODE, MIC_AVAILABLE
 
     greeting = get_greeting()
-    speak(f"{greeting}. MAZE online. All systems ready.")
+    speak(f"{greeting}. MAZE online. All systems ready.", wait=True)
 
     # Check microphone
     print("🔍 Checking microphone...")
@@ -426,7 +429,7 @@ def run():
     except Exception as e:
         print(f"   ⚠️  Telegram bot skipped: {e}\n")
 
-    speak("What is your mission?")
+    speak("What is your mission?", wait=True)
 
     idle_count = 0
 
