@@ -105,6 +105,8 @@ VK_MEDIA_PREV = 0xB1
 VK_SHIFT = 0x10
 VK_N = ord('N')
 VK_P = ord('P')
+VK_L = ord('L')
+VK_J = ord('J')
 
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [("wVk", ctypes.wintypes.WORD),
@@ -129,14 +131,20 @@ def _send_input(vk_codes, down=True):
         inp = INPUT()
         inp.type = INPUT_KEYBOARD
         inp.ki.wVk = vk
-        flags = KEYEVENTF_EXTENDEDKEY
+        
+        flags = 0
+        # Media keys (0xB0-0xB3) and volume keys (0xAD-0xAF) are extended keys
+        if 0xAD <= vk <= 0xB3:
+            flags |= KEYEVENTF_EXTENDEDKEY
+            
         if not down:
             flags |= KEYEVENTF_KEYUP
         inp.ki.dwFlags = flags
         inputs.append(inp)
     
     n = len(inputs)
-    ctypes.windll.user32.SendInput(n, ctypes.byref((INPUT * n)(*inputs)), ctypes.sizeof(INPUT))
+    if n > 0:
+        ctypes.windll.user32.SendInput(n, ctypes.byref((INPUT * n)(*inputs)), ctypes.sizeof(INPUT))
 
 def _press_media_key(vk_code):
     """Simulate a media key press (down then up)."""
@@ -476,18 +484,28 @@ def run():
             speak("Resumed.")
             continue
 
-        # Next track — word-level matching
-        if _has_media_word(command, ["next", "skip", "forward"]):
+        # Next track / Skip forward
+        if _has_media_word(command, ["next"]):
             _press_media_key(VK_MEDIA_NEXT)
-            _send_combination([VK_SHIFT, VK_N])  # YouTube shortcut
+            _send_combination([VK_SHIFT, VK_N])  # YouTube shortcut (next video)
             speak("Next track.")
             continue
 
-        # Previous track — word-level matching
-        if _has_media_word(command, ["previous", "back", "rewind"]):
+        if _has_media_word(command, ["forward", "skip"]):
+            _press_media_key(VK_L)  # YouTube shortcut (forward 10s)
+            speak("Skipped forward.")
+            continue
+
+        # Previous track / Skip backward
+        if _has_media_word(command, ["previous"]):
             _press_media_key(VK_MEDIA_PREV)
-            _send_combination([VK_SHIFT, VK_P])  # YouTube shortcut
+            _send_combination([VK_SHIFT, VK_P])  # YouTube shortcut (prev video)
             speak("Previous track.")
+            continue
+
+        if _has_media_word(command, ["backward", "back", "rewind"]):
+            _press_media_key(VK_J)  # YouTube shortcut (backward 10s)
+            speak("Skipped backward.")
             continue
 
         # ── Special commands ──────────────────
