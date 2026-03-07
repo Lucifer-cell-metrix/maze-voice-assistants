@@ -6,7 +6,7 @@ Upgrades to Gemini AI automatically when API is available.
 
 import sys, os, time, datetime, webbrowser, subprocess, urllib.parse, json, random, re, ctypes
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from config import AI_PROVIDER, GEMINI_API_KEY, MAX_MEMORY_TURNS
+from config import AI_PROVIDER, GEMINI_API_KEY, MAX_MEMORY_TURNS, OPENROUTER_API_KEY
 
 # Conversation memory
 _memory = []
@@ -59,6 +59,11 @@ def _normalize_command(command: str) -> str:
     command = command.replace("vs court", "vs code")
     command = command.replace("note pad", "notepad")
     command = command.replace("calculater", "calculator")
+    # Fix media control mishearings
+    command = command.replace("ms next", "next")
+    command = command.replace("miss next", "next")
+    command = command.replace("previews", "previous")
+    command = command.replace("previse", "previous")
     return command
 
 def _extract_after(command: str, keywords: list) -> str:
@@ -268,6 +273,11 @@ YT_REMOVE_WORDS = {"open", "youtube", "search", "play", "on", "and", "in",
                     "find", "for", "video", "the", "a", "me", "show",
                     "you", "tube", "please", "song", "music"}
 
+# YouTube playlist tracking — so next/previous actually work
+_yt_playlist = []          # List of video IDs from last search
+_yt_current_idx = -1       # Current video index in the playlist
+_yt_last_query = ""        # What was searched
+
 def _extract_query(command: str, remove_words: set) -> str:
     """Remove keywords as WHOLE WORDS (not substrings) from command."""
     words = command.split()
@@ -275,21 +285,34 @@ def _extract_query(command: str, remove_words: set) -> str:
     return " ".join(filtered).strip()
 
 def _play_on_youtube(query: str) -> str:
-    """Find the first YouTube video for query and play it directly."""
+    """Find YouTube videos for query, play first one, and save results for next/prev."""
+    global _yt_playlist, _yt_current_idx, _yt_last_query
     try:
         import requests as req
         search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         response = req.get(search_url, headers=headers, timeout=5)
-        # Find the first video ID
-        video_ids = re.findall(r'watch\?v=([a-zA-Z0-9_-]{11})', response.text)
-        if video_ids:
-            video_url = f"https://www.youtube.com/watch?v={video_ids[0]}"
+        # Find all video IDs
+        raw_ids = re.findall(r'watch\?v=([a-zA-Z0-9_-]{11})', response.text)
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_ids = []
+        for vid in raw_ids:
+            if vid not in seen:
+                seen.add(vid)
+                unique_ids.append(vid)
+        if unique_ids:
+            _yt_playlist = unique_ids[:20]   # Keep top 20 results
+            _yt_current_idx = 0
+            _yt_last_query = query
+            video_url = f"https://www.youtube.com/watch?v={unique_ids[0]}"
             webbrowser.open(video_url)
-            return f"Playing {query} on YouTube."
+            return f"Playing {query} on YouTube. {len(unique_ids)} tracks in queue."
     except:
         pass
     # Fallback: open search results
+    _yt_playlist = []
+    _yt_current_idx = -1
     url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
     webbrowser.open(url)
     return f"Searching {query} on YouTube."
@@ -491,6 +514,12 @@ VK_VOLUME_UP   = 0xAF
 VK_VOLUME_DOWN = 0xAE
 VK_VOLUME_MUTE = 0xAD
 
+# Media control keys
+VK_MEDIA_NEXT  = 0xB0    # Next track
+VK_MEDIA_PREV  = 0xB1    # Previous track
+VK_MEDIA_STOP  = 0xB2    # Stop
+VK_MEDIA_PLAY  = 0xB3    # Play/Pause toggle
+
 def _volume_up(steps=5):
     for _ in range(steps):
         _press_key(VK_VOLUME_UP)
@@ -528,6 +557,78 @@ def _set_brightness(level):
         return level
     except:
         return -1
+
+def _handle_media_control(command: str) -> str:
+    """Handle media playback controls (next, previous, pause, stop).
+    Uses YouTube playlist for next/prev, media keys for pause/play."""
+    global _yt_current_idx
+
+    # Strip filler words
+    cmd = command
+    for filler in [" the ", " a ", " my ", " please "]:
+        cmd = cmd.replace(filler, " ")
+    cmd = " ".join(cmd.split()).strip()
+
+    # Fix common speech-to-text mishearings
+    cmd = cmd.replace("ms next", "next")
+    cmd = cmd.replace("am next", "next")
+    cmd = cmd.replace("and next", "next")
+    cmd = cmd.replace("is next", "next")
+    cmd = cmd.replace("miss next", "next")
+
+    # ── Next Track ──
+    if _contains_any(cmd, ["next track", "next song", "next music",
+                            "skip track", "skip song", "skip this"]) \
+       or cmd.strip() in ["next", "skip"]:
+        # If we have a YouTube playlist, open the next video
+        if _yt_playlist and _yt_current_idx < len(_yt_playlist) - 1:
+            _yt_current_idx += 1
+            video_url = f"https://www.youtube.com/watch?v={_yt_playlist[_yt_current_idx]}"
+            webbrowser.open(video_url)
+            remaining = len(_yt_playlist) - _yt_current_idx - 1
+            return f"Playing next track. {remaining} more in queue."
+        elif _yt_playlist and _yt_current_idx >= len(_yt_playlist) - 1:
+            return "That was the last track in the queue. Say 'play' followed by a song name to start fresh."
+        else:
+            # No YouTube playlist — try system media key (for Spotify, VLC, etc.)
+            _press_key(VK_MEDIA_NEXT)
+            return "Skipping to next track."
+
+    # ── Previous Track ──
+    if _contains_any(cmd, ["previous track", "previous song", "previous music",
+                            "last track", "last song", "go back track",
+                            "prev track", "prev song"]) \
+       or cmd.strip() in ["previous", "prev", "go back"]:
+        # If we have a YouTube playlist, open the previous video
+        if _yt_playlist and _yt_current_idx > 0:
+            _yt_current_idx -= 1
+            video_url = f"https://www.youtube.com/watch?v={_yt_playlist[_yt_current_idx]}"
+            webbrowser.open(video_url)
+            return "Playing previous track."
+        elif _yt_playlist and _yt_current_idx <= 0:
+            return "Already at the first track. No previous track available."
+        else:
+            # No YouTube playlist — try system media key
+            _press_key(VK_MEDIA_PREV)
+            return "Going to previous track."
+
+    # ── Pause / Resume (media key works fine for YouTube in browser) ──
+    if _contains_any(cmd, ["pause music", "pause song", "pause track",
+                            "resume music", "resume song", "resume track",
+                            "pause media", "resume media", "pause play",
+                            "play pause", "toggle pause"]) \
+       or cmd.strip() in ["pause", "resume", "unpause"]:
+        _press_key(VK_MEDIA_PLAY)
+        return "Toggled play/pause."
+
+    # ── Stop ──
+    if _contains_any(cmd, ["stop music", "stop song", "stop track",
+                            "stop playing", "stop media"]):
+        _press_key(VK_MEDIA_STOP)
+        return "Stopping playback."
+
+    return None
+
 
 def _handle_system_control(command: str) -> str:
     """Handle volume and brightness control."""
@@ -817,7 +918,12 @@ def smart_offline_response(command: str) -> str:
         or (command.strip() in ["date", "today"])):
         return datetime.datetime.now().strftime("Today is %A, %B %d, %Y.")
 
-    # ── YouTube / Play (HIGHEST PRIORITY) ───
+    # ── Media Controls (HIGHEST PRIORITY) ──
+    result = _handle_media_control(command)
+    if result:
+        return result
+
+    # ── YouTube / Play ───────────────────────
     if "youtube" in command or _has_word(command, ["play"]):
         result = _handle_search(command)
         if result:
@@ -1019,13 +1125,92 @@ def _gemini_response(command: str) -> str:
         return smart_offline_response(command)
 
 
+# ── OpenRouter AI Response ────────────────────────────
+# Free models to try in order (auto-router first, then specific free models)
+OPENROUTER_MODELS = [
+    "google/gemma-3n-e4b-it:free",             # Google Gemma 3n (fast, reliable)
+    "arcee-ai/trinity-large-preview:free",      # Arcee Trinity Large (smart, detailed)
+]
+
+def _openrouter_response(command: str) -> str:
+    """Send command to OpenRouter API with model fallback chain."""
+    try:
+        import requests as req
+
+        _memory.append({"role": "user", "parts": [{"text": command}]})
+
+        # Convert memory to OpenAI format
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are MAZE, an advanced AI assistant. You are professional, sharp, and efficient. "
+                    "Keep responses concise — 3-5 sentences. No markdown or formatting. "
+                    "Your responses will be spoken aloud, so keep them natural and conversational."
+                )
+            }
+        ]
+        for m in _memory[-MAX_MEMORY_TURNS:]:
+            role = "assistant" if m["role"] == "model" else "user"
+            text = m["parts"][0]["text"] if isinstance(m["parts"], list) else str(m["parts"])
+            messages.append({"role": role, "content": text})
+
+        last_error = None
+        for model_name in OPENROUTER_MODELS:
+            try:
+                response = req.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model_name,
+                        "messages": messages,
+                        "max_tokens": 500,
+                        "temperature": 0.7,
+                    },
+                    timeout=15,
+                )
+
+                data = response.json()
+                if response.status_code == 200 and "choices" in data:
+                    reply = data["choices"][0]["message"]["content"].strip()
+                    _memory.append({"role": "model", "parts": [{"text": reply}]})
+                    return reply
+                else:
+                    last_error = data.get("error", {}).get("message", str(data))
+                    print(f"   ⚠️  Model {model_name} unavailable, trying next...")
+                    continue
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        # All models failed
+        _memory.pop()
+        print(f"   ⚠️  OpenRouter error: {str(last_error)[:80]}")
+        return smart_offline_response(command)
+
+    except Exception as e:
+        if _memory and _memory[-1].get("role") == "user":
+            _memory.pop()
+        print(f"   ⚠️  OpenRouter unavailable: {str(e)[:80]}")
+        return smart_offline_response(command)
+
+
 # ── Action Handler (runs commands that DO things) ─────
 def _try_actions(command: str) -> str:
     """Try to execute actionable commands (apps, websites, music, tasks, etc.).
     Returns response if an action was taken, None if no action matched."""
     cmd = _normalize_command(command)
 
-    # ── YouTube / Play (HIGHEST PRIORITY) ───
+    # ── Media Controls (HIGHEST PRIORITY) ──
+    # Must come before search/play so "next"/"previous" don't get misrouted
+    result = _handle_media_control(cmd)
+    if result:
+        return result
+
+    # ── YouTube / Play ───────────────────────
     if "youtube" in cmd or _has_word(cmd, ["play"]):
         result = _handle_search(cmd)
         if result:
@@ -1116,7 +1301,8 @@ def _try_actions(command: str) -> str:
 
 # ── Main Router ───────────────────────────────────────
 def get_response(command: str) -> str:
-    """Try actions first (they actually DO things), then use AI for conversation."""
+    """Try actions first (they actually DO things), then use AI for conversation.
+    AI Priority: Gemini → OpenRouter → Offline Brain."""
     global _gemini_failed_count
 
     # ── STEP 1: Always try actionable commands first ──
@@ -1127,6 +1313,7 @@ def get_response(command: str) -> str:
 
     # ── STEP 2: No action matched → use AI for conversation/questions ──
     # If Gemini has been failing, check if cooldown period has passed
+    gemini_on_cooldown = False
     if _gemini_failed_count >= 3:
         elapsed = time.time() - _gemini_last_fail_time
         remaining = GEMINI_COOLDOWN - elapsed
@@ -1134,13 +1321,23 @@ def get_response(command: str) -> str:
             _gemini_failed_count = 0  # Reset — give Gemini another chance
             print("   🔄 Retrying Gemini AI connection...")
         else:
+            gemini_on_cooldown = True
             mins = int(remaining // 60)
             secs = int(remaining % 60)
             # Only show cooldown message occasionally (not every single command)
             if elapsed < 5:  # Just entered cooldown
-                print(f"   ⏳ Gemini AI on cooldown. Retrying in {mins}m {secs}s. Using offline brain.")
+                print(f"   ⏳ Gemini on cooldown ({mins}m {secs}s). Trying OpenRouter...")
 
+    # Try Gemini first
     if AI_PROVIDER == "gemini" and GEMINI_API_KEY and _gemini_failed_count < 3:
         return _gemini_response(command)
-    else:
-        return smart_offline_response(command)
+
+    # Gemini unavailable → try OpenRouter as fallback
+    if OPENROUTER_API_KEY:
+        if gemini_on_cooldown:
+            print("   🔄 Using OpenRouter AI (Gemini on cooldown)...")
+        return _openrouter_response(command)
+
+    # No AI available → offline brain
+    return smart_offline_response(command)
+

@@ -22,8 +22,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # Option 2: Google Gemini (requires API key)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-# Which AI provider to use: "openai" | "gemini" | "offline"
-AI_PROVIDER = "gemini"   # ← Using Gemini AI brain
+# Option 3: OpenRouter (access GPT-4, Claude, Llama, etc. via one key)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+
+# Which AI provider to use: "openai" | "gemini" | "openrouter" | "offline"
+AI_PROVIDER = "gemini"   # ← Primary AI brain (falls back to OpenRouter if rate-limited)
 
 # ── Memory Settings ───────────────────────────
 MAX_MEMORY_TURNS = 10     # How many past messages to remember

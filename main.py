@@ -486,9 +486,23 @@ def run():
 
         # Next track / Skip forward
         if _has_media_word(command, ["next"]):
-            _press_media_key(VK_MEDIA_NEXT)
-            _send_combination([VK_SHIFT, VK_N])  # YouTube shortcut (next video)
-            speak("Next track.")
+            # Use YouTube playlist from brain.py if available
+            from assistant.brain import _yt_playlist, _yt_current_idx
+            import assistant.brain as _brain
+            if _brain._yt_playlist and _brain._yt_current_idx < len(_brain._yt_playlist) - 1:
+                _brain._yt_current_idx += 1
+                import webbrowser
+                video_url = f"https://www.youtube.com/watch?v={_brain._yt_playlist[_brain._yt_current_idx]}"
+                webbrowser.open(video_url)
+                remaining = len(_brain._yt_playlist) - _brain._yt_current_idx - 1
+                speak(f"Next track. {remaining} more in queue.")
+            elif _brain._yt_playlist and _brain._yt_current_idx >= len(_brain._yt_playlist) - 1:
+                speak("That was the last track. Say 'play' followed by a song name to start fresh.")
+            else:
+                # No YouTube playlist — try media key + YouTube shortcut
+                _press_media_key(VK_MEDIA_NEXT)
+                _send_combination([VK_SHIFT, VK_N])
+                speak("Next track.")
             continue
 
         if _has_media_word(command, ["forward", "skip"]):
@@ -498,9 +512,21 @@ def run():
 
         # Previous track / Skip backward
         if _has_media_word(command, ["previous"]):
-            _press_media_key(VK_MEDIA_PREV)
-            _send_combination([VK_SHIFT, VK_P])  # YouTube shortcut (prev video)
-            speak("Previous track.")
+            # Use YouTube playlist from brain.py if available
+            import assistant.brain as _brain
+            if _brain._yt_playlist and _brain._yt_current_idx > 0:
+                _brain._yt_current_idx -= 1
+                import webbrowser
+                video_url = f"https://www.youtube.com/watch?v={_brain._yt_playlist[_brain._yt_current_idx]}"
+                webbrowser.open(video_url)
+                speak("Previous track.")
+            elif _brain._yt_playlist and _brain._yt_current_idx <= 0:
+                speak("Already at the first track.")
+            else:
+                # No YouTube playlist — try media key + YouTube shortcut
+                _press_media_key(VK_MEDIA_PREV)
+                _send_combination([VK_SHIFT, VK_P])
+                speak("Previous track.")
             continue
 
         if _has_media_word(command, ["backward", "back", "rewind"]):
