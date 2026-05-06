@@ -21,8 +21,16 @@ logs/
 
 # OS
 Thumbs.db
-Desktop.ini
-.DS_Store
+# Desktop entry
+*.lnk
+*.desktop
+
+# Personal Memory and Data
+memory/contacts.json
+memory/chat_history.json
+memory/long_term.json
+memory/user_profile.txt
+memory/app_index.json
 
 # Notes
 notes/
