@@ -1,3 +1,5 @@
+import os
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"  # Suppress pygame banner
 import speech_recognition as sr
 import pyttsx3
 import datetime
@@ -8,10 +10,42 @@ import socket
 import json
 import threading
 
+# ── Fix Windows terminal encoding (so emoji don't crash) ─────────────
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 # ── Load config ──────────────────────────────────────
 sys.path.append(os.path.dirname(__file__))
-from config import ASSISTANT_NAME, VOICE_RATE, VOICE_VOLUME
+from config import ASSISTANT_NAME, VOICE_RATE, VOICE_VOLUME, CONVERSATION_PAUSE_SHORT, CONVERSATION_PAUSE_LONG
 from assistant.brain import get_response
+
+# ── Neural Voice Engine ───────────────────────────────
+NEURAL_VOICE_ENABLED = False
+try:
+    from assistant.voice_engine import speak_neural, stop_neural, is_neural_available, speak_with_emotion
+    NEURAL_VOICE_ENABLED = is_neural_available()
+except ImportError:
+    def speak_neural(t): return False
+    def stop_neural(): pass
+    def is_neural_available(): return False
+    def speak_with_emotion(t, e): return False
+
+# ── NLP Engine ────────────────────────────────────────
+NLP_ENABLED = False
+try:
+    from assistant.nlp_engine import analyze as nlp_analyze, get_emotion_from_sentiment
+    NLP_ENABLED = True
+except ImportError:
+    def nlp_analyze(t): return None
+    def get_emotion_from_sentiment(s, sc): return "calm"
 
 # Global flag to control the assistant
 RUNNING = True
@@ -20,6 +54,8 @@ MAX_VOICE_FAILS = 5            # Higher tolerance before switching to keyboard
 _speech_thread = None          # Thread running the current speech
 _stop_speaking = False         # Flag to interrupt speech
 _current_engine = None         # Reference to active pyttsx3 engine (for force-stop)
+_last_speak_end = 0            # Timestamp when last speech ended
+_last_response_length = 0      # Length of last spoken response (for dynamic pause)
 
 # ── Voice Output Setup ───────────────────────────────
 def _create_engine():
@@ -35,12 +71,27 @@ def _create_engine():
             break
     return eng
 
-def _speak_worker(text: str):
-    """Worker function that runs speech in a thread."""
+def _speak_worker(text: str, emotion: str = "calm"):
+    """Worker function that runs speech in a thread.
+    Uses edge-tts neural voice first, falls back to pyttsx3."""
     global _current_engine
+
+    # ── Try neural voice first (human-like girl voice) ──
+    if NEURAL_VOICE_ENABLED:
+        try:
+            if emotion and emotion != "calm":
+                success = speak_with_emotion(text, emotion)
+            else:
+                success = speak_neural(text)
+            if success:
+                return  # Neural voice worked!
+        except Exception as e:
+            pass  # Fall through to pyttsx3
+
+    # ── Fallback: pyttsx3 (robotic but works offline) ──
     try:
         eng = _create_engine()
-        _current_engine = eng  # Store so stop_speaking() can kill it
+        _current_engine = eng
         eng.say(text)
         eng.runAndWait()
         _current_engine = None
@@ -49,14 +100,19 @@ def _speak_worker(text: str):
     except Exception as e:
         _current_engine = None
 
-def speak(text: str, wait=False):
+def speak(text: str, wait=False, emotion: str = "calm"):
     """Convert text to speech and print to console.
     wait=False (default): starts speech in background, returns immediately.
-    wait=True: blocks until speech is finished."""
-    global _speech_thread, _stop_speaking
+    wait=True: blocks until speech is finished.
+    emotion: voice emotion adjustment (happy, sad, excited, calm, serious)."""
+    global _speech_thread, _stop_speaking, _last_response_length
     if not RUNNING:
         return
-    print(f"\n🤖 MAZE: {text}\n")
+    print(f"\n\U0001f916 MAZE: {text}\n")
+    _last_response_length = len(text)
+
+    # Notify avatar
+    if emotion and emotion != "calm":
 
     # Stop any ongoing speech first
     stop_speaking()
@@ -64,15 +120,28 @@ def speak(text: str, wait=False):
     # Start new speech
     _stop_speaking = False
     if wait:
-        _speak_worker(text)
+        _speak_worker(text, emotion)
+        _last_speak_end = time.time()
     else:
-        _speech_thread = threading.Thread(target=_speak_worker, args=(text,), daemon=True)
+        def _worker_wrapper():
+            global _last_speak_end
+            _speak_worker(text, emotion)
+            _last_speak_end = time.time()
+        _speech_thread = threading.Thread(target=_worker_wrapper, daemon=True)
         _speech_thread.start()
 
 def stop_speaking():
     """Interrupt current speech immediately by killing the engine."""
     global _stop_speaking, _current_engine
     _stop_speaking = True
+
+    # Stop neural voice if active
+    if NEURAL_VOICE_ENABLED:
+        try:
+            stop_neural()
+        except:
+            pass
+
     # Force-stop the pyttsx3 engine — this makes runAndWait() exit immediately
     if _current_engine:
         try:
@@ -82,6 +151,7 @@ def stop_speaking():
         _current_engine = None
     if _speech_thread and _speech_thread.is_alive():
         _speech_thread.join(timeout=0.5)
+
 
 def is_speaking() -> bool:
     """Check if MAZE is currently speaking."""
@@ -273,8 +343,31 @@ recognizer.energy_threshold = 4000      # Higher = needs louder voice (avoid bac
 recognizer.dynamic_energy_threshold = True
 recognizer.pause_threshold = 1          # Seconds of silence before phrase is considered complete
 
-# Use Microphone Array (index 2 = Realtek) — change if your mic is different
-MIC_INDEX = 2  # Run test_mic.py to see your available microphones
+# Auto-detect microphone — find the first working input device
+def _find_mic_index():
+    """Scan audio devices and return the index of the best microphone."""
+    try:
+        import pyaudio
+        p = pyaudio.PyAudio()
+        best_idx = None
+        # Prefer "Microphone Array" (Realtek built-in), then any mic with input channels
+        for i in range(p.get_device_count()):
+            info = p.get_device_info_by_index(i)
+            if info.get("maxInputChannels", 0) > 0:
+                name = info.get("name", "").lower()
+                # Prefer Realtek Microphone Array (built-in laptop mic)
+                if "microphone array" in name and "realtek" in name:
+                    p.terminate()
+                    return i
+                # Track first usable mic as fallback
+                if best_idx is None:
+                    best_idx = i
+        p.terminate()
+        return best_idx  # Could be None if no mic found at all
+    except Exception:
+        return None
+
+MIC_INDEX = _find_mic_index()
 
 def _check_internet(timeout=1.5) -> bool:
     """Quick internet connectivity check before attempting voice recognition."""
@@ -401,10 +494,29 @@ def get_greeting() -> str:
 
 # ── Main Loop ─────────────────────────────────────────
 def run():
-    global INPUT_MODE, MIC_AVAILABLE
+    global INPUT_MODE, MIC_AVAILABLE, NEURAL_VOICE_ENABLED, NLP_ENABLED
+
+    # ── Check Neural Voice ──
+    print("🔍 Checking neural voice engine...")
+    if NEURAL_VOICE_ENABLED:
+        print("✅ Neural voice ready! (Microsoft Aria — confident, professional voice)\n")
+    else:
+        print("⚠️  Neural voice not available. Using system voice.")
+        print("   → Install for better voice: pip install edge-tts pygame\n")
+
+    # ── Check NLP Engine ──
+    print("🔍 Checking NLP engine...")
+    if NLP_ENABLED:
+        from assistant.nlp_engine import is_available as nlp_spacy_check
+        if nlp_spacy_check():
+            print("✅ NLP engine ready! (spaCy — natural language understanding)\n")
+        else:
+            print("⚠️  NLP running in basic mode (spaCy not available).\n")
+    else:
+        print("⚠️  NLP not available.\n")
 
     greeting = get_greeting()
-    speak(f"{greeting}. MAZE online. All systems ready.", wait=True)
+    speak(f"{greeting}. MAZE online. All systems ready.", wait=True, emotion="happy")
 
     # Check microphone
     print("🔍 Checking microphone...")
@@ -442,6 +554,27 @@ def run():
     idle_count = 0
 
     while True:
+        # ── Breathing pause — wait after speaking before listening again ──
+        # This gives a natural gap so the conversation doesn't feel rushed
+        if is_speaking():
+            # MAZE is still talking — wait for her to finish
+            while is_speaking():
+                time.sleep(0.2)
+
+        # Smart cooldown — short responses get shorter pause
+        time_since_spoke = time.time() - _last_speak_end
+        if _last_speak_end > 0:
+            # Dynamic pause: short responses ("Paused.", "Done.") = 1.5s, longer = 3s
+            if _last_response_length < 50:
+                pause_needed = CONVERSATION_PAUSE_SHORT
+            else:
+                pause_needed = CONVERSATION_PAUSE_LONG
+            
+            if time_since_spoke < pause_needed:
+                remaining = pause_needed - time_since_spoke
+                print(f"   \U0001f4ad (pause {remaining:.0f}s...)")
+                time.sleep(remaining)
+
         try:
             command = get_command()
         except KeyboardInterrupt:
@@ -455,7 +588,6 @@ def run():
         if not command:
             idle_count += 1
             if idle_count >= 5:
-                # Only show tip if MAZE is NOT currently speaking
                 if not is_speaking():
                     print("💡 Tip: Type 'switch' to use keyboard input instead.\n")
                 idle_count = 0
@@ -468,9 +600,22 @@ def run():
         if is_speaking():
             stop_speaking()
 
+        # ── Interrupt / Stop MAZE from speaking ────────
+        # Check BEFORE media controls so user can say "stop" to shut MAZE up
+        interrupt_words = ["shut up", "ok maze", "okay maze", "stop talking",
+                           "be quiet", "enough talking", "i got it", "thats enough",
+                           "that's enough", "okay stop", "ok stop", "alright"]
+        if _has_media_word(command, ["stop", "enough"]) or any(w in command for w in interrupt_words):
+            # If MAZE is still speaking or just finished, treat as "stop talking"
+            if is_speaking() or (time.time() - _last_speak_end < 2):
+                stop_speaking()
+                print("   \U0001f910 (MAZE stopped talking)")
+                continue
+            # Otherwise fall through to media pause below
+
         # ── Pause / Stop / Resume media ────────
         # Use word-level matching so "image stop", "pause YouTube video", etc. all work
-        if _has_media_word(command, ["stop", "pause", "silence", "quiet", "enough"]):
+        if _has_media_word(command, ["stop", "pause", "silence", "quiet"]):
             _press_media_key(VK_MEDIA_PLAY_PAUSE)  # Toggle play/pause on YouTube etc.
             speak("Paused.")
             continue
@@ -486,17 +631,16 @@ def run():
 
         # Next track / Skip forward
         if _has_media_word(command, ["next"]):
-            # Use YouTube playlist from brain.py if available
-            from assistant.brain import _yt_playlist, _yt_current_idx
-            import assistant.brain as _brain
-            if _brain._yt_playlist and _brain._yt_current_idx < len(_brain._yt_playlist) - 1:
-                _brain._yt_current_idx += 1
+            # Use YouTube playlist from media.py if available
+            import assistant.actions.media as _media
+            if _media._yt_playlist and _media._yt_current_idx < len(_media._yt_playlist) - 1:
+                _media._yt_current_idx += 1
                 import webbrowser
-                video_url = f"https://www.youtube.com/watch?v={_brain._yt_playlist[_brain._yt_current_idx]}"
+                video_url = f"https://www.youtube.com/watch?v={_media._yt_playlist[_media._yt_current_idx]}"
                 webbrowser.open(video_url)
-                remaining = len(_brain._yt_playlist) - _brain._yt_current_idx - 1
+                remaining = len(_media._yt_playlist) - _media._yt_current_idx - 1
                 speak(f"Next track. {remaining} more in queue.")
-            elif _brain._yt_playlist and _brain._yt_current_idx >= len(_brain._yt_playlist) - 1:
+            elif _media._yt_playlist and _media._yt_current_idx >= len(_media._yt_playlist) - 1:
                 speak("That was the last track. Say 'play' followed by a song name to start fresh.")
             else:
                 # No YouTube playlist — try media key + YouTube shortcut
@@ -512,15 +656,15 @@ def run():
 
         # Previous track / Skip backward
         if _has_media_word(command, ["previous"]):
-            # Use YouTube playlist from brain.py if available
-            import assistant.brain as _brain
-            if _brain._yt_playlist and _brain._yt_current_idx > 0:
-                _brain._yt_current_idx -= 1
+            # Use YouTube playlist from media.py if available
+            import assistant.actions.media as _media
+            if _media._yt_playlist and _media._yt_current_idx > 0:
+                _media._yt_current_idx -= 1
                 import webbrowser
-                video_url = f"https://www.youtube.com/watch?v={_brain._yt_playlist[_brain._yt_current_idx]}"
+                video_url = f"https://www.youtube.com/watch?v={_media._yt_playlist[_media._yt_current_idx]}"
                 webbrowser.open(video_url)
                 speak("Previous track.")
-            elif _brain._yt_playlist and _brain._yt_current_idx <= 0:
+            elif _media._yt_playlist and _media._yt_current_idx <= 0:
                 speak("Already at the first track.")
             else:
                 # No YouTube playlist — try media key + YouTube shortcut
@@ -554,10 +698,24 @@ def run():
             print("\n\U0001f916 MAZE: Shutting down. Stay disciplined. See you soon.\n")
             shutdown()
 
+        # Notify avatar of user message
+
+        # ── NLP Analysis (sentiment → emotion for voice) ──
+        emotion = "calm"
+        if NLP_ENABLED:
+            try:
+                nlp_result = nlp_analyze(command)
+                if nlp_result:
+                    emotion = get_emotion_from_sentiment(
+                        nlp_result.sentiment, nlp_result.sentiment_score
+                    )
+            except Exception:
+                pass
+
         # Get AI response
         try:
             response = get_response(command)
-            speak(response)
+            speak(response, emotion=emotion)
         except Exception as e:
             print(f"   ❌ Error getting response: {e}")
             speak("I hit an error processing that. Let me try again.")

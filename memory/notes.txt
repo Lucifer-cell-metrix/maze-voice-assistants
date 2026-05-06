@@ -9,3 +9,8 @@
 [2026-03-07 12:02 PM] i hope python assignment
 [2026-03-07 12:03 PM] who is lucifer
 [2026-03-07 12:03 PM] dangers
+
+FYSALE4000
+To make an AI model, start by defining your problem and gathering data. Then, choose a framework like TensorFlow or PyTorch, preprocess your data, and train a model using algorithms like neural networks. Finally, test and refine it. If you need specific guidance, I can help break it down further.
+[2026-04-08 08:24 PM] Local LLM
+[2026-04-14 08:22 PM] kali linux

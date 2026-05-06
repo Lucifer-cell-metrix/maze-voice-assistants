@@ -1,80 +1,55 @@
 """
-MAZE — AI Brain Module (v3 — Smarter Offline + Gemini)
-Works 100% offline with flexible command matching.
-Upgrades to Gemini AI automatically when API is available.
+MAZE — AI Brain Module (v4 — Modular Architecture)
+Slim router that delegates to action modules and AI providers.
+Includes: conversation awareness, emotion-aware responses, smart memory.
 """
 
-import sys, os, time, datetime, webbrowser, subprocess, urllib.parse, json, random, re, ctypes
+import sys
+import os
+import time
+import datetime
+import random
+import webbrowser
+import urllib.parse
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from config import AI_PROVIDER, GEMINI_API_KEY, MAX_MEMORY_TURNS, OPENROUTER_API_KEY
+from config import AI_PROVIDER, GEMINI_API_KEY, OPENROUTER_API_KEY
 
-# Conversation memory
-_memory = []
-_gemini_failed_count = 0
-_gemini_last_fail_time = 0     # Timestamp of last Gemini failure
-GEMINI_COOLDOWN = 300          # 5 minutes cooldown after rate limit (free tier resets)
-_tasks = []
+# ── Import Action Modules ────────────────────────────
+from assistant.actions.helpers import contains_any, has_word, normalize_command
+from assistant.actions.apps import open_app, find_file, APPS, BROWSER_APPS
+from assistant.actions.media import handle_media_control, play_on_youtube, _yt_playlist, _yt_current_idx
+from assistant.actions.web import handle_search, open_website
+from assistant.actions.tasks import handle_tasks
+from assistant.actions.notes import handle_notes
+from assistant.actions.system import handle_system_control, volume_up, volume_down, volume_mute, get_brightness, set_brightness
+from assistant.actions.messaging import handle_messaging, handle_calling
+from assistant.actions.code import handle_code_writing
+from assistant.actions.math_calc import handle_math
+from assistant.actions.internship import handle_internship
 
-# ── Task file for persistence ────────────────────────
-TASKS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "memory", "tasks.json")
+# ── Import Memory Modules ────────────────────────────
+from assistant.memory_module.short_term import (
+    get_memory, save_memory, add_exchange, add_user_message, add_ai_message,
+    get_user_profile, handle_remember, get_exchange_count,
+    set_last_topic, get_last_topic
+)
+from assistant.memory_module.long_term import (
+    get_context_for_ai, auto_summarize
+)
 
-def _load_tasks():
-    global _tasks
-    try:
-        if os.path.exists(TASKS_FILE):
-            with open(TASKS_FILE, "r") as f:
-                _tasks = json.load(f)
-    except:
-        _tasks = []
+# ── Import AI Providers ──────────────────────────────
+from assistant.ai_providers.ollama import get_intent, ollama_chat, ask_llm
+from assistant.ai_providers.gemini import gemini_response, is_available as gemini_available, is_on_cooldown as gemini_on_cooldown
+from assistant.ai_providers.openrouter import openrouter_response, is_available as openrouter_available
 
-def _save_tasks():
-    try:
-        with open(TASKS_FILE, "w") as f:
-            json.dump(_tasks, f, indent=2)
-    except:
-        pass
+# ── Expose for main.py backward compatibility ────────
+# main.py imports _yt_playlist, _yt_current_idx from brain
+# Re-export from media module
+import assistant.actions.media as _media_module
 
-_load_tasks()
-
-# ── Helpers ──────────────────────────────────────────
-
-def _contains_any(command: str, words: list) -> bool:
-    """Check if command contains any of the words/phrases."""
-    return any(w in command for w in words)
-
-def _has_word(command: str, words: list) -> bool:
-    """Check if command contains any word as a whole word (not substring).
-    Use this for short words like 'hi', 'hey', 'yo' that could match inside other words."""
-    cmd_words = command.split()
-    return any(w in cmd_words for w in words)
-
-def _normalize_command(command: str) -> str:
-    """Normalize common speech variations."""
-    command = command.lower().strip()
-    # Fix common speech-to-text issues
-    command = command.replace("you tube", "youtube")
-    command = command.replace("you too", "youtube")
-    command = command.replace("u tube", "youtube")
-    command = command.replace("v s code", "vs code")
-    command = command.replace("vs court", "vs code")
-    command = command.replace("note pad", "notepad")
-    command = command.replace("calculater", "calculator")
-    # Fix media control mishearings
-    command = command.replace("ms next", "next")
-    command = command.replace("miss next", "next")
-    command = command.replace("previews", "previous")
-    command = command.replace("previse", "previous")
-    return command
-
-def _extract_after(command: str, keywords: list) -> str:
-    """Extract text after any of the given keywords."""
-    for kw in keywords:
-        if kw in command:
-            return command.split(kw, 1)[1].strip()
-    return ""
 
 # ── Motivational Quotes & Jokes ──────────────────────
-
 MOTIVATIONAL_QUOTES = [
     "The only way to do great work is to love what you do. Keep pushing.",
     "You're one project away from changing your life. Don't stop now.",
@@ -100,787 +75,17 @@ JOKES = [
     "Why did the developer go broke? Because he used up all his cache.",
 ]
 
-# ── Application Launcher ─────────────────────────────
-
-APPS = {
-    "notepad":         "notepad.exe",
-    "calculator":      "calc.exe",
-    "open calculator": "calc.exe",
-    "open calc":       "calc.exe",
-    "paint":           "mspaint.exe",
-    "explorer":        "explorer.exe",
-    "file explorer":   "explorer.exe",
-    "files":           "explorer.exe",
-    "task manager":    "taskmgr.exe",
-    "cmd":             "cmd.exe",
-    "command prompt":  "cmd.exe",
-    "terminal":        "cmd.exe",
-    "powershell":      "powershell.exe",
-    "settings":        "ms-settings:",
-    "vs code":         "code",
-    "vscode":          "code",
-    "visual studio":   "code",
-    "snipping tool":   "snippingtool.exe",
-    "screenshot":      "snippingtool.exe",
-    "snip":            "snippingtool.exe",
-    "word":            "winword.exe",
-    "excel":           "excel.exe",
-    "powerpoint":      "powerpnt.exe",
-    "outlook":         "outlook.exe",
-    "photos":          "ms-photos:",
-    "camera":          "microsoft.windows.camera:",
-    "clock":           "ms-clock:",
-    "calendar":        "outlookcal:",
-    "maps":            "bingmaps:",
-    "store":           "ms-windows-store:",
-    "xbox":            "xbox:",
-    "telegram":        "tg://",
-}
-
-# Browser paths to try on Windows
-CHROME_PATHS = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    os.path.expanduser(r"~\AppData\Local\Google\Chrome\Application\chrome.exe"),
-]
-
-BRAVE_PATHS = [
-    r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-    r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
-    os.path.expanduser(r"~\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe"),
-]
-
-BROWSER_APPS = {
-    "chrome":        CHROME_PATHS,
-    "google chrome": CHROME_PATHS,
-    "brave":         BRAVE_PATHS,
-    "edge":          ["msedge.exe"],
-    "microsoft edge":["msedge.exe"],
-    "firefox":       ["firefox.exe"],
-    "browser":       CHROME_PATHS,  # Default to Chrome
-}
-
-def _open_app(app_name: str) -> str:
-    """Open a system application by name."""
-    app_name = app_name.lower().strip()
-
-    # Check if it's a browser request
-    for browser_name, paths in BROWSER_APPS.items():
-        if browser_name in app_name:
-            for path in paths:
-                if os.path.exists(path):
-                    subprocess.Popen([path])
-                    return f"Opening {browser_name.title()} for you."
-            # Try with shell=True as fallback
-            try:
-                subprocess.Popen(paths[-1], shell=True)
-                return f"Opening {browser_name.title()} for you."
-            except:
-                pass
-            # Final fallback — default browser
-            webbrowser.open("https://www.google.com")
-            return f"{browser_name.title()} not found. Opening default browser."
-
-    # Check regular apps — use whole word matching to avoid 'calc' in 'calculate'
-    for key, exe in APPS.items():
-        # For short words like 'calc', check as whole word
-        if len(key) <= 4:
-            if _has_word(app_name, [key]):
-                try:
-                    if ":" in exe:
-                        os.startfile(exe)
-                    else:
-                        subprocess.Popen(exe, shell=True)
-                    return f"Opening {key.title()} for you."
-                except Exception as e:
-                    return f"Couldn't open {key.title()}. Error: {str(e)}"
-        else:
-            if key in app_name:
-                try:
-                    # Use startfile for protocols (ms-settings:, tg://, etc.) or executables
-                    if ":" in exe:
-                        os.startfile(exe)
-                    else:
-                        subprocess.Popen(exe, shell=True)
-                    return f"Opening {key.title()} for you."
-                except Exception as e:
-                    return f"Couldn't open {key.title()}. Error: {str(e)}"
-
-    return None
-
-# ── Website Opener ───────────────────────────────────
-
-WEBSITES = {
-    # Developer
-    "github":          "https://github.com",
-    "stackoverflow":   "https://stackoverflow.com",
-    "stack overflow":   "https://stackoverflow.com",
-    # Email & Communication
-    "gmail":           "https://mail.google.com",
-    "email":           "https://mail.google.com",
-    "mail":            "https://mail.google.com",
-    "whatsapp":        "https://web.whatsapp.com",
-    "discord":         "https://discord.com/app",
-    # Social Media
-    "instagram":       "https://instagram.com",
-    "twitter":         "https://twitter.com",
-    "linkedin":        "https://linkedin.com",
-    "facebook":        "https://facebook.com",
-    "reddit":          "https://reddit.com",
-    "pinterest":       "https://pinterest.com",
-    "snapchat":        "https://web.snapchat.com",
-    "threads":         "https://threads.net",
-    # AI Tools
-    "chatgpt":         "https://chat.openai.com",
-    "gemini":          "https://gemini.google.com",
-    "claude":          "https://claude.ai",
-    # Entertainment
-    "spotify":         "https://open.spotify.com",
-    "netflix":         "https://netflix.com",
-    "hotstar":         "https://hotstar.com",
-    "prime video":     "https://primevideo.com",
-    "amazon prime":    "https://primevideo.com",
-    # Shopping
-    "amazon":          "https://amazon.in",
-    "flipkart":        "https://flipkart.com",
-    "myntra":          "https://myntra.com",
-    # Productivity
-    "google drive":    "https://drive.google.com",
-    "google docs":     "https://docs.google.com",
-    "notion":          "https://notion.so",
-    "canva":           "https://canva.com",
-    "figma":           "https://figma.com",
-    # Learning
-    "udemy":           "https://udemy.com",
-    "coursera":        "https://coursera.org",
-    "geeksforgeeks":   "https://geeksforgeeks.org",
-    "leetcode":        "https://leetcode.com",
-    "w3schools":       "https://w3schools.com",
-}
-
-def _open_website(command: str) -> str:
-    """Open a known website."""
-    for key, url in WEBSITES.items():
-        if key in command:
-            webbrowser.open(url)
-            return f"Opening {key.title()} for you."
-    return None
-
-# ── Search Handler (YouTube priority over Google) ────
-
-# Words to remove from query (as WHOLE WORDS only, not substrings)
-YT_REMOVE_WORDS = {"open", "youtube", "search", "play", "on", "and", "in",
-                    "find", "for", "video", "the", "a", "me", "show",
-                    "you", "tube", "please", "song", "music"}
-
-# YouTube playlist tracking — so next/previous actually work
-_yt_playlist = []          # List of video IDs from last search
-_yt_current_idx = -1       # Current video index in the playlist
-_yt_last_query = ""        # What was searched
-
-def _extract_query(command: str, remove_words: set) -> str:
-    """Remove keywords as WHOLE WORDS (not substrings) from command."""
-    words = command.split()
-    filtered = [w for w in words if w not in remove_words]
-    return " ".join(filtered).strip()
-
-def _play_on_youtube(query: str) -> str:
-    """Find YouTube videos for query, play first one, and save results for next/prev."""
-    global _yt_playlist, _yt_current_idx, _yt_last_query
-    try:
-        import requests as req
-        search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        response = req.get(search_url, headers=headers, timeout=5)
-        # Find all video IDs
-        raw_ids = re.findall(r'watch\?v=([a-zA-Z0-9_-]{11})', response.text)
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_ids = []
-        for vid in raw_ids:
-            if vid not in seen:
-                seen.add(vid)
-                unique_ids.append(vid)
-        if unique_ids:
-            _yt_playlist = unique_ids[:20]   # Keep top 20 results
-            _yt_current_idx = 0
-            _yt_last_query = query
-            video_url = f"https://www.youtube.com/watch?v={unique_ids[0]}"
-            webbrowser.open(video_url)
-            return f"Playing {query} on YouTube. {len(unique_ids)} tracks in queue."
-    except:
-        pass
-    # Fallback: open search results
-    _yt_playlist = []
-    _yt_current_idx = -1
-    url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-    webbrowser.open(url)
-    return f"Searching {query} on YouTube."
-
-def _handle_search(command: str) -> str:
-    """Handle search commands. YouTube gets priority when mentioned."""
-
-    # ── YouTube (if "youtube" is in command) ──
-    if "youtube" in command:
-        query = _extract_query(command, YT_REMOVE_WORDS)
-        # If user said "search" → show results only. If "play" → auto-play.
-        if query:
-            if _has_word(command, ["play"]):
-                return _play_on_youtube(query)
-            else:
-                # Just show search results (don't auto-play)
-                url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-                webbrowser.open(url)
-                return f"Searching {query} on YouTube."
-        else:
-            webbrowser.open("https://www.youtube.com")
-            return "Opening YouTube."
-
-    # ── "Play X" = Auto-play on YouTube (even without saying youtube) ──
-    if command.startswith("play ") or " play " in command:
-        query = _extract_query(command, YT_REMOVE_WORDS | {"play"})
-        if query:
-            return _play_on_youtube(query)
-        else:
-            webbrowser.open("https://www.youtube.com")
-            return "Opening YouTube. What do you want to play?"
-
-    # ── Wikipedia search ──
-    if _contains_any(command, ["wikipedia", "wiki"]):
-        wiki_remove = {"wikipedia", "wiki", "search", "open", "on", "about", "for", "the"}
-        query = _extract_query(command, wiki_remove)
-        if query:
-            url = f"https://en.wikipedia.org/wiki/{urllib.parse.quote(query)}"
-            webbrowser.open(url)
-            return f"Opening Wikipedia for: {query}"
-        return "What should I look up on Wikipedia?"
-
-    # ── Google search (default) ──
-    if _contains_any(command, ["search", "google", "look up", "find"]):
-        google_remove = {"search", "google", "look", "up", "find", "for", "about", "open", "the"}
-        query = _extract_query(command, google_remove)
-        if query:
-            url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-            webbrowser.open(url)
-            return f"Searching Google for: {query}"
-        return "What would you like me to search for?"
-
-    return None
-
-# ── Task Manager ─────────────────────────────────────
-
-def _handle_tasks(command: str) -> str:
-    """Handle task management commands."""
-    global _tasks
-
-    # Add task
-    if _contains_any(command, ["add task", "new task", "create task"]):
-        task = _extract_after(command, ["add task", "new task", "create task"])
-        if task:
-            _tasks.append({"task": task, "done": False, "time": datetime.datetime.now().isoformat()})
-            _save_tasks()
-            return f"Task added: {task}. You now have {len([t for t in _tasks if not t['done']])} pending tasks."
-        return "What task do you want to add? Say 'add task' followed by the task name."
-
-    # Show tasks (flexible matching — singular/plural, various phrasings)
-    if (_contains_any(command, ["show task", "my task", "list task", "task list", "all task",
-                                "show tasks", "my tasks", "list tasks", "pending task",
-                                "what are my task", "tasks", "show me task", "show me tasks",
-                                "view task", "view tasks"])
-        or ("show" in command and "task" in command)
-        or ("task" in command and _has_word(command, ["show", "list", "view", "see", "all", "my", "pending"]))):
-        if not _tasks:
-            return "You have no tasks yet. Say 'add task' followed by the task name to add one."
-        pending = [t for t in _tasks if not t["done"]]
-        done = [t for t in _tasks if t["done"]]
-        if not pending:
-            return f"All tasks completed! You've finished {len(done)} tasks. Great work!"
-        result = f"You have {len(pending)} pending tasks. "
-        for i, t in enumerate(pending, 1):
-            result += f"Task {i}: {t['task']}. "
-        if done:
-            result += f"And {len(done)} completed."
-        return result
-
-    # Complete task
-    if _contains_any(command, ["complete task", "done task", "finish task", "mark task"]):
-        try:
-            num = int(''.join(filter(str.isdigit, command))) - 1
-            pending = [t for t in _tasks if not t["done"]]
-            if 0 <= num < len(pending):
-                pending[num]["done"] = True
-                _save_tasks()
-                return f"Nice! Task '{pending[num]['task']}' is done. Keep going!"
-        except:
-            pass
-        return "Which task? Say 'complete task 1', 'complete task 2', etc."
-
-    # Clear tasks
-    if _contains_any(command, ["clear task", "delete task", "remove task",
-                                "clear all task", "delete all task"]):
-        _tasks.clear()
-        _save_tasks()
-        return "All tasks cleared. Fresh start."
-
-    return None
-
-# ── Note-Taking / Type Message ───────────────────────
-
-NOTES_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "memory", "notes.txt")
-
-def _handle_notes(command: str) -> str:
-    """Handle note-taking and message typing."""
-
-    # Note down / Write / Type message — also match "note [content]" directly
-    is_note_cmd = _contains_any(command, ["note down", "note this", "write down", "write this",
-                                "type message", "type this", "take note", "make note",
-                                "remember this", "remember that", "save note",
-                                "jot down", "write note"])
-
-    # Also match "note [something]" — but NOT "notepad", "show notes", etc.
-    if not is_note_cmd and command.startswith("note ") and not _contains_any(command, [
-            "notepad", "show note", "clear note", "delete note", "my note", "read note", "view note"]):
-        is_note_cmd = True
-
-    if is_note_cmd:
-        # Extract the note content
-        note = command
-        for remove in ["note down", "note this", "write down", "write this",
-                        "type message", "type this", "take note", "make note",
-                        "remember this", "remember that", "save note",
-                        "jot down", "write note", "please", "that"]:
-            note = note.replace(remove, " ")
-        # If it was just "note [content]", strip the "note" prefix
-        if note.strip().startswith("note "):
-            note = note.strip()[5:]
-        note = " ".join(note.split()).strip()
-
-        if note:
-            # Save to file
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %I:%M %p")
-            try:
-                with open(NOTES_FILE, "a", encoding="utf-8") as f:
-                    f.write(f"[{timestamp}] {note}\n")
-            except:
-                pass
-
-            # Open in Notepad
-            try:
-                subprocess.Popen(["notepad.exe", NOTES_FILE])
-            except:
-                pass
-
-            return f"Got it. Noted down: {note}. Opening in Notepad."
-        return "What do you want me to note down? Say 'note' followed by your message."
-
-    # Show notes
-    if _contains_any(command, ["show note", "show notes", "my notes", "read notes",
-                                "read note", "show my notes", "view notes"]):
-        try:
-            if os.path.exists(NOTES_FILE):
-                with open(NOTES_FILE, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                if lines:
-                    # Open in Notepad
-                    subprocess.Popen(["notepad.exe", NOTES_FILE])
-                    count = len(lines)
-                    last_note = lines[-1].strip()
-                    return f"You have {count} notes. Latest: {last_note}. Opening in Notepad."
-                return "No notes yet. Say 'note' followed by your message to start."
-            return "No notes yet. Say 'note' followed by your message to start."
-        except:
-            return "Couldn't read notes file."
-
-    # Clear notes
-    if _contains_any(command, ["clear notes", "delete notes", "remove notes",
-                                "clear all notes", "erase notes"]):
-        try:
-            if os.path.exists(NOTES_FILE):
-                os.remove(NOTES_FILE)
-            return "All notes cleared."
-        except:
-            return "Couldn't clear notes."
-
-    return None
-
-# ── System Control (Volume & Brightness) ─────────────
-
-def _press_key(vk_code):
-    """Simulate a key press using Windows API."""
-    ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)       # key down
-    ctypes.windll.user32.keybd_event(vk_code, 0, 0x0002, 0)  # key up
-
-VK_VOLUME_UP   = 0xAF
-VK_VOLUME_DOWN = 0xAE
-VK_VOLUME_MUTE = 0xAD
-
-# Media control keys
-VK_MEDIA_NEXT  = 0xB0    # Next track
-VK_MEDIA_PREV  = 0xB1    # Previous track
-VK_MEDIA_STOP  = 0xB2    # Stop
-VK_MEDIA_PLAY  = 0xB3    # Play/Pause toggle
-
-def _volume_up(steps=5):
-    for _ in range(steps):
-        _press_key(VK_VOLUME_UP)
-        time.sleep(0.05)
-
-def _volume_down(steps=5):
-    for _ in range(steps):
-        _press_key(VK_VOLUME_DOWN)
-        time.sleep(0.05)
-
-def _volume_mute():
-    _press_key(VK_VOLUME_MUTE)
-
-def _get_brightness():
-    """Get current screen brightness (0-100)."""
-    try:
-        result = subprocess.run(
-            ["powershell", "-Command",
-             "(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightness).CurrentBrightness"],
-            capture_output=True, text=True, timeout=5
-        )
-        return int(result.stdout.strip())
-    except:
-        return -1
-
-def _set_brightness(level):
-    """Set screen brightness (0-100)."""
-    level = max(0, min(100, level))
-    try:
-        subprocess.run(
-            ["powershell", "-Command",
-             f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, {level})"],
-            capture_output=True, text=True, timeout=5
-        )
-        return level
-    except:
-        return -1
-
-def _handle_media_control(command: str) -> str:
-    """Handle media playback controls (next, previous, pause, stop).
-    Uses YouTube playlist for next/prev, media keys for pause/play."""
-    global _yt_current_idx
-
-    # Strip filler words
-    cmd = command
-    for filler in [" the ", " a ", " my ", " please "]:
-        cmd = cmd.replace(filler, " ")
-    cmd = " ".join(cmd.split()).strip()
-
-    # Fix common speech-to-text mishearings
-    cmd = cmd.replace("ms next", "next")
-    cmd = cmd.replace("am next", "next")
-    cmd = cmd.replace("and next", "next")
-    cmd = cmd.replace("is next", "next")
-    cmd = cmd.replace("miss next", "next")
-
-    # ── Next Track ──
-    if _contains_any(cmd, ["next track", "next song", "next music",
-                            "skip track", "skip song", "skip this"]) \
-       or cmd.strip() in ["next", "skip"]:
-        # If we have a YouTube playlist, open the next video
-        if _yt_playlist and _yt_current_idx < len(_yt_playlist) - 1:
-            _yt_current_idx += 1
-            video_url = f"https://www.youtube.com/watch?v={_yt_playlist[_yt_current_idx]}"
-            webbrowser.open(video_url)
-            remaining = len(_yt_playlist) - _yt_current_idx - 1
-            return f"Playing next track. {remaining} more in queue."
-        elif _yt_playlist and _yt_current_idx >= len(_yt_playlist) - 1:
-            return "That was the last track in the queue. Say 'play' followed by a song name to start fresh."
-        else:
-            # No YouTube playlist — try system media key (for Spotify, VLC, etc.)
-            _press_key(VK_MEDIA_NEXT)
-            return "Skipping to next track."
-
-    # ── Previous Track ──
-    if _contains_any(cmd, ["previous track", "previous song", "previous music",
-                            "last track", "last song", "go back track",
-                            "prev track", "prev song"]) \
-       or cmd.strip() in ["previous", "prev", "go back"]:
-        # If we have a YouTube playlist, open the previous video
-        if _yt_playlist and _yt_current_idx > 0:
-            _yt_current_idx -= 1
-            video_url = f"https://www.youtube.com/watch?v={_yt_playlist[_yt_current_idx]}"
-            webbrowser.open(video_url)
-            return "Playing previous track."
-        elif _yt_playlist and _yt_current_idx <= 0:
-            return "Already at the first track. No previous track available."
-        else:
-            # No YouTube playlist — try system media key
-            _press_key(VK_MEDIA_PREV)
-            return "Going to previous track."
-
-    # ── Pause / Resume (media key works fine for YouTube in browser) ──
-    if _contains_any(cmd, ["pause music", "pause song", "pause track",
-                            "resume music", "resume song", "resume track",
-                            "pause media", "resume media", "pause play",
-                            "play pause", "toggle pause"]) \
-       or cmd.strip() in ["pause", "resume", "unpause"]:
-        _press_key(VK_MEDIA_PLAY)
-        return "Toggled play/pause."
-
-    # ── Stop ──
-    if _contains_any(cmd, ["stop music", "stop song", "stop track",
-                            "stop playing", "stop media"]):
-        _press_key(VK_MEDIA_STOP)
-        return "Stopping playback."
-
-    return None
-
-
-def _handle_system_control(command: str) -> str:
-    """Handle volume and brightness control."""
-    # Strip filler words so "decrease the volume" → "decrease volume"
-    for filler in [" the ", " a ", " my ", " please "]:
-        command = command.replace(filler, " ")
-    command = " ".join(command.split())  # Clean extra spaces
-
-    # ── Volume Controls ──
-    if _contains_any(command, ["volume up", "increase volume", "louder",
-                                "turn up volume", "raise volume", "sound up",
-                                "volume increase", "volume high", "volume higher"]):
-        _volume_up(5)
-        return "Volume increased."
-
-    if _contains_any(command, ["volume down", "decrease volume", "quieter", "softer",
-                                "turn down volume", "lower volume", "sound down",
-                                "volume decrease", "volume low", "volume lower"]):
-        _volume_down(5)
-        return "Volume decreased."
-
-    if _contains_any(command, ["mute", "unmute", "silence", "toggle mute",
-                                "mute volume", "volume mute", "shut up volume"]):
-        _volume_mute()
-        return "Volume muted. Say mute again to unmute."
-
-    if _contains_any(command, ["full volume", "max volume", "maximum volume",
-                                "volume max", "volume full", "volume 100"]):
-        _volume_up(50)  # Press up many times to reach max
-        return "Volume set to maximum."
-
-    if _contains_any(command, ["minimum volume", "volume minimum", "volume zero",
-                                "volume 0", "no volume", "silent"]):
-        _volume_down(50)  # Press down many times to reach min
-        return "Volume set to minimum."
-
-    # ── Brightness Controls ──
-    if _contains_any(command, ["brightness up", "increase brightness", "brighter",
-                                "screen brighter", "turn up brightness",
-                                "brightness increase", "brightness high", "brightness higher",
-                                "more brightness", "bright up"]):
-        current = _get_brightness()
-        if current >= 0:
-            new = min(100, current + 20)
-            _set_brightness(new)
-            return f"Brightness increased to {new} percent."
-        return "Brightness increased."
-
-    if _contains_any(command, ["brightness down", "decrease brightness", "dimmer",
-                                "screen dimmer", "turn down brightness", "dim",
-                                "brightness decrease", "brightness low", "brightness lower",
-                                "less brightness", "bright down"]):
-        current = _get_brightness()
-        if current >= 0:
-            new = max(0, current - 20)
-            _set_brightness(new)
-            return f"Brightness decreased to {new} percent."
-        return "Brightness decreased."
-
-    if _contains_any(command, ["full brightness", "max brightness", "maximum brightness",
-                                "brightness max", "brightness full", "brightness 100"]):
-        _set_brightness(100)
-        return "Brightness set to maximum."
-
-    if _contains_any(command, ["minimum brightness", "lowest brightness",
-                                "brightness minimum", "brightness zero", "brightness 0"]):
-        _set_brightness(10)  # Don't go to 0, screen would be invisible
-        return "Brightness set to minimum."
-
-    # Check for specific percentage: "set brightness to 50"
-    if "brightness" in command:
-        try:
-            nums = re.findall(r'\d+', command)
-            if nums:
-                level = int(nums[0])
-                if 0 <= level <= 100:
-                    _set_brightness(level)
-                    return f"Brightness set to {level} percent."
-        except:
-            pass
-
-    # Check for specific volume percentage: "set volume to 50"
-    if "volume" in command:
-        try:
-            nums = re.findall(r'\d+', command)
-            if nums:
-                level = int(nums[0])
-                if 0 <= level <= 100:
-                    # First mute/lower to 0, then raise to target
-                    _volume_down(50)
-                    steps = level // 2  # Each step is ~2%
-                    _volume_up(steps)
-                    return f"Volume set to approximately {level} percent."
-        except:
-            pass
-
-    return None
-
-# ── Code Writing ─────────────────────────────────────
-
-CODE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "generated_code")
-
-def _handle_code_writing(command: str) -> str:
-    """Generate code using Gemini AI and save to a file."""
-    if not (AI_PROVIDER == "gemini" and GEMINI_API_KEY):
-        return "I need the Gemini AI connection to write code. Please check your API key."
-
-    # Extract what code to write
-    code_request = command
-    for remove in ["write code", "write a code", "create code", "create a code",
-                    "code for", "generate code", "make code", "make a code",
-                    "write program", "write a program", "create program",
-                    "write script", "write a script", "create script",
-                    "for me", "please", "that"]:
-        code_request = code_request.replace(remove, " ")
-    code_request = " ".join(code_request.split()).strip()
-
-    if not code_request:
-        return "What code do you want me to write? Say 'write code for' followed by what you need."
-
-    try:
-        from google import genai
-        client = genai.Client(api_key=GEMINI_API_KEY)
-
-        prompt = (
-            f"Write clean, well-commented code for: {code_request}. "
-            "Provide ONLY the code, no explanations before or after. "
-            "Include comments in the code to explain what each part does. "
-            "Detect the best programming language for this task. "
-            "Start the first line with a comment indicating the language, e.g. # Python or // JavaScript"
-        )
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config={
-                "max_output_tokens": 2000,
-                "temperature": 0.3,
-            }
-        )
-
-        code = response.text.strip()
-        # Remove markdown code fences if present
-        if code.startswith("```"):
-            lines = code.split("\n")
-            lang_line = lines[0].replace("```", "").strip()
-            code = "\n".join(lines[1:])
-            if code.endswith("```"):
-                code = code[:-3].strip()
-
-        # Determine file extension from first line or language
-        ext_map = {
-            "python": ".py", "javascript": ".js", "java": ".java",
-            "c++": ".cpp", "cpp": ".cpp", "c": ".c", "html": ".html",
-            "css": ".css", "rust": ".rs", "go": ".go", "ruby": ".rb",
-            "php": ".php", "typescript": ".ts", "bash": ".sh",
-            "shell": ".sh", "sql": ".sql", "swift": ".swift",
-            "kotlin": ".kt", "r": ".r",
-        }
-        ext = ".py"  # default
-        first_line = code.split("\n")[0].lower() if code else ""
-        for lang, e in ext_map.items():
-            if lang in first_line or (lang_line and lang in lang_line.lower()):
-                ext = e
-                break
-
-        # Save code to file
-        os.makedirs(CODE_DIR, exist_ok=True)
-        safe_name = re.sub(r'[^\w\s-]', '', code_request)[:40].strip().replace(' ', '_')
-        filename = f"{safe_name}{ext}"
-        filepath = os.path.join(CODE_DIR, filename)
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(code)
-
-        # Try to open in VS Code, fallback to Notepad
-        try:
-            subprocess.Popen(["code", filepath], shell=True)
-        except:
-            try:
-                subprocess.Popen(["notepad.exe", filepath])
-            except:
-                pass
-
-        return f"Done! I wrote {code_request} code and saved it as {filename}. Opening it now."
-
-    except Exception as e:
-        return f"Sorry, I couldn't generate code right now. Error: {str(e)[:60]}"
-
-
-# ── Math Calculator ──────────────────────────────────
-
-def _handle_math(command: str) -> str:
-    """Handle calculations."""
-    # Clean the command
-    expr = command
-    for remove in ["calculate", "what is", "what's", "how much is", "solve", "equals"]:
-        expr = expr.replace(remove, " ")
-
-    # Replace math words with operators
-    math_words = {
-        " plus ": "+", " add ": "+", " added to ": "+",
-        " minus ": "-", " subtract ": "-", " subtracted from ": "-",
-        " times ": "*", " multiply ": "*", " multiplied by ": "*", " into ": "*",
-        " x ": "*", " × ": "*", " X ": "*",
-        " divided by ": "/", " divide ": "/", " over ": "/",
-        " power ": "**", " to the power of ": "**", " square ": "**2",
-        " mod ": "%", " modulo ": "%", " remainder ": "%",
-    }
-    for word, op in math_words.items():
-        expr = expr.replace(word, op)
-
-    # Also handle cases like "25x4" or "25*4"
-    expr = expr.replace("x", "*").replace("×", "*").replace("X", "*")
-
-    # Keep only math characters
-    expr = ''.join(c for c in expr if c in '0123456789.+-*/() %')
-    expr = expr.strip()
-
-    # Strip leading/trailing operators (from incomplete speech like "254 times" or "times 4")
-    expr = expr.strip('+-*/% ')
-
-    if expr and any(c.isdigit() for c in expr):
-        # Check if expression has at least 2 numbers and an operator
-        numbers = re.findall(r'\d+\.?\d*', expr)
-        has_operator = any(op in expr for op in ['+', '-', '*', '/', '%', '**'])
-
-        if len(numbers) < 2 or not has_operator:
-            # Incomplete expression — ask for clarification
-            num = numbers[0] if numbers else expr
-            return f"I heard '{command}'. Did you mean something like '{num} times 4' or '{num} plus 10'? Give me the full calculation."
-
-        try:
-            result = eval(expr)
-            # Format nicely
-            if isinstance(result, float) and result == int(result):
-                result = int(result)
-            return f"The answer is {result}."
-        except:
-            return "I couldn't calculate that. Try saying it like 'calculate 25 times 4'."
-    return None
 
 # ── Smart Offline Brain ──────────────────────────────
 
 def smart_offline_response(command: str) -> str:
     """Smart offline brain — handles real tasks with flexible matching."""
-    command = _normalize_command(command)
+    command = normalize_command(command)
 
-    # ── Greetings (use _has_word to avoid matching 'yo' inside 'youtube' etc.) ──
-    if (_has_word(command, ["hello", "hi", "hey", "heyy", "howdy", "yo", "hola", "namaste"])
-        or _contains_any(command, ["what's up", "whats up"])
-        ) and not _contains_any(command, ["open", "search", "youtube", "google", "task",
+    # ── Greetings ──
+    if (has_word(command, ["hello", "hi", "hey", "heyy", "howdy", "yo", "hola", "namaste"])
+        or contains_any(command, ["what's up", "whats up"])
+        ) and not contains_any(command, ["open", "search", "youtube", "google", "task",
                                            "calculate", "notepad", "chrome", "show"]):
         hour = datetime.datetime.now().hour
         if hour < 12:
@@ -891,133 +96,130 @@ def smart_offline_response(command: str) -> str:
             return "Good evening! Ready to get productive?"
         return "Good night! What are we working on?"
 
-    # ── Identity ────────────────────────────
-    if _contains_any(command, ["who are you", "who r u", "hu r u", "your name",
-                                "what are you", "what r u", "what is your name",
-                                "tell me about yourself", "introduce yourself"]):
+    # ── Identity ──
+    if contains_any(command, ["who are you", "who r u", "hu r u", "your name",
+                               "what are you", "what r u", "what is your name",
+                               "tell me about yourself", "introduce yourself"]):
         return ("I am MAZE, your personal AI assistant. Built to help you learn, "
                 "build, and grow. I can open apps, search the web, manage tasks, "
-                "do math, motivate you, and much more. All for free!")
+                "do math, find internships, and much more. All for free!")
 
-    if _contains_any(command, ["what can you do", "your capabilities", "help me",
-                                "what do you do", "features"]) or command.strip() == "help":
+    if contains_any(command, ["what can you do", "your capabilities", "help me",
+                               "what do you do", "features"]) or command.strip() == "help":
         return ("I can open apps like Notepad, Chrome, Brave, VS Code, and Paint. "
                 "I play songs on YouTube, search Google and Wikipedia. "
                 "I manage tasks and notes. I open WhatsApp, Instagram, GitHub. "
-                "I control volume and brightness. "
+                "I control volume and brightness. I find internships on Internshala. "
                 "I do math, tell time, motivate you, and tell jokes. Just ask!")
 
-    # ── Time & Date (check ONLY if not a task/app command) ──
-    if (_contains_any(command, ["what time", "the time", "current time", "clock"])
+    # ── Time & Date ──
+    if (contains_any(command, ["what time", "the time", "current time", "clock"])
         or (command.strip() == "time")
-        or (_has_word(command, ["time"]) and not _contains_any(command, ["task", "open", "youtube", "times"]))):
+        or (has_word(command, ["time"]) and not contains_any(command, ["task", "open", "youtube", "times"]))):
         now = datetime.datetime.now()
         return f"It's {now.strftime('%I:%M %p')} on {now.strftime('%A, %B %d, %Y')}."
 
-    if (_contains_any(command, ["what day", "today's date", "which day"])
+    if (contains_any(command, ["what day", "today's date", "which day"])
         or (command.strip() in ["date", "today"])):
         return datetime.datetime.now().strftime("Today is %A, %B %d, %Y.")
 
-    # ── Media Controls (HIGHEST PRIORITY) ──
-    result = _handle_media_control(command)
+    # ── Media Controls ──
+    result = handle_media_control(command)
     if result:
+        set_last_topic("music")
         return result
 
-    # ── YouTube / Play ───────────────────────
-    if "youtube" in command or _has_word(command, ["play"]):
-        result = _handle_search(command)
+    # ── YouTube / Play ──
+    if "youtube" in command or has_word(command, ["play"]):
+        result = handle_search(command)
         if result:
+            set_last_topic("music", command)
             return result
 
-    # ── Open commands ───────────────────────
-    if _contains_any(command, ["open", "launch", "start", "run"]):
-        # Check for web searches first
-        result = _handle_search(command)
+    # ── Open commands ──
+    if contains_any(command, ["open", "launch", "start", "run"]):
+        result = handle_search(command)
         if result:
             return result
-        # Then websites
-        result = _open_website(command)
+        result = open_website(command)
         if result:
             return result
-        # Then apps
         app_query = command
         for remove in ["open", "launch", "start", "run"]:
             app_query = app_query.replace(remove, " ")
         app_query = app_query.strip()
-        result = _open_app(app_query)
+        result = open_app(app_query)
         if result:
             return result
 
-    # ── Direct app name (without "open") ────
+    # ── Direct app name ──
     for app_name in list(APPS.keys()) + list(BROWSER_APPS.keys()):
         if app_name in command and len(command.split()) <= 3:
-            result = _open_app(command)
+            result = open_app(command)
             if result:
                 return result
 
-    # ── Web searches ────────────────────────
-    result = _handle_search(command)
+    # ── Web searches ──
+    result = handle_search(command)
+    if result:
+        return result
+    result = open_website(command)
     if result:
         return result
 
-    # ── Website opening ─────────────────────
-    result = _open_website(command)
+    # ── Task management ──
+    result = handle_tasks(command)
     if result:
         return result
 
-    # ── Task management ─────────────────────
-    result = _handle_tasks(command)
+    # ── Notes ──
+    result = handle_notes(command)
     if result:
         return result
 
-    # ── Note-taking / Type message ───────────
-    result = _handle_notes(command)
+    # ── System control ──
+    result = handle_system_control(command)
     if result:
         return result
 
-    # ── System control (volume/brightness) ───
-    result = _handle_system_control(command)
-    if result:
-        return result
-
-    # ── Math ────────────────────────────────
-    if _contains_any(command, ["calculate", "what is", "what's", "how much",
-                                "plus", "minus", "times", "divided", "multiply",
-                                "add", "subtract", "solve", " x "]):
-        result = _handle_math(command)
+    # ── Math ──
+    if contains_any(command, ["calculate", "what is", "what's", "how much",
+                               "plus", "minus", "times", "divided", "multiply",
+                               "add", "subtract", "solve", " x "]):
+        result = handle_math(command)
         if result:
             return result
 
-    # ── Motivation ──────────────────────────
-    if _contains_any(command, ["motivate", "motivation", "inspire", "lazy",
-                                "feeling lazy", "push me", "encourage",
-                                "i can't", "i feel bad", "feeling down"]):
+    # ── Motivation ──
+    if contains_any(command, ["motivate", "motivation", "inspire", "lazy",
+                               "feeling lazy", "push me", "encourage",
+                               "i can't", "i feel bad", "feeling down"]):
         return random.choice(MOTIVATIONAL_QUOTES)
 
-    # ── Jokes ───────────────────────────────
-    if _contains_any(command, ["joke", "funny", "laugh", "humor"]):
+    # ── Jokes ──
+    if contains_any(command, ["joke", "funny", "laugh", "humor"]):
         return random.choice(JOKES)
 
-    # ── Status ──────────────────────────────
-    if _contains_any(command, ["how are you", "how r u", "you good", "status",
-                                "how do you do", "how you doing"]):
+    # ── Status ──
+    if contains_any(command, ["how are you", "how r u", "you good", "status",
+                               "how do you do", "how you doing"]):
         return "All systems running perfectly. I'm always ready to help. What do you need?"
 
-    # ── Thanks ──────────────────────────────
-    if _contains_any(command, ["thank", "thanks", "thx", "appreciate"]):
+    # ── Thanks ──
+    if contains_any(command, ["thank", "thanks", "thx", "appreciate"]):
         return random.choice(["Anytime! That's what I'm here for.",
                               "Always. Keep building!",
                               "You're welcome. Let's keep going.",
                               "Happy to help. What's next?"])
 
-    # ── Goodbyes (not exit) ─────────────────
-    if _contains_any(command, ["good morning", "good evening", "good night", "good afternoon"]):
+    # ── Goodbyes ──
+    if contains_any(command, ["good morning", "good evening", "good night", "good afternoon"]):
         now = datetime.datetime.now()
         return f"Hey! It's {now.strftime('%I:%M %p')}. What are we working on?"
 
-    # ── Learning requests ───────────────────
-    if _contains_any(command, ["teach me", "learn about", "explain", "tutorial",
-                                "how to", "what is a", "how does", "learn "]):
+    # ── Learning ──
+    if contains_any(command, ["teach me", "learn about", "explain", "tutorial",
+                               "how to", "what is a", "how does", "learn "]):
         query = command
         for remove in ["teach me", "learn about", "learn", "explain",
                         "tutorial", "how to", "how does", "what is a", "about", "me"]:
@@ -1029,7 +231,6 @@ def smart_offline_response(command: str) -> str:
             return f"Let me find learning resources for {query}. Opening search now."
         return "What topic would you like to learn about?"
 
-    # ── Direct topic + 'tutorial' (e.g. 'python tutorial') ──
     if "tutorial" in command:
         query = command.replace("tutorial", "").strip()
         if query:
@@ -1039,12 +240,11 @@ def smart_offline_response(command: str) -> str:
         return "What tutorial are you looking for?"
 
     # ── Default: search Google for unknown questions ──
-    # If it looks like a question or topic, search Google instead of giving up
     question_words = ["who", "what", "where", "when", "why", "how", "is", "are",
                       "was", "were", "do", "does", "did", "can", "could", "will",
                       "would", "should", "tell me", "define", "meaning"]
     first_word = command.split()[0] if command.split() else ""
-    if first_word in question_words or _contains_any(command, ["tell me about", "tell me", "who is", "what is"]):
+    if first_word in question_words or contains_any(command, ["tell me about", "tell me", "who is", "what is"]):
         query = command
         url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
         webbrowser.open(url)
@@ -1052,246 +252,276 @@ def smart_offline_response(command: str) -> str:
 
     return (f"I heard: '{command}'. I'm not sure what to do with that offline. "
             "Try: open notepad, search python, add task, calculate 25 times 4, "
-            "tell me a joke, or motivate me! For questions, I need internet for my AI brain.")
+            "find internship, tell me a joke, or motivate me!")
 
 
-# ── Gemini Response Engine ────────────────────────────
-MODELS_TO_TRY = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-]
+# ── Intent Step Executor ─────────────────────────────
 
-def _gemini_response(command: str) -> str:
-    global _gemini_failed_count, _gemini_last_fail_time
-    try:
-        from google import genai
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        _memory.append({"role": "user", "parts": [{"text": command}]})
+def _handle_intent_steps(steps: list, original_command: str) -> str:
+    """Execute structured action steps returned by get_intent()."""
+    responses = []
 
-        system_instruction = (
-            "You are MAZE, an advanced AI assistant inspired by JARVIS from Iron Man. "
-            "Intelligent, calm, professional, friendly, and motivating. "
-            "Keep responses concise but COMPLETE — always finish your sentences. "
-            "Give 3-5 sentence answers. No markdown or formatting. "
-            "Never cut off mid-thought. "
-            "NEVER include raw code in your responses — if asked for code, "
-            "describe what the code does in plain English instead. "
-            "Your responses will be spoken aloud, so keep them natural and conversational."
-        )
+    for step in steps:
+        action = step.get("action", "").lower().strip()
+        value = str(step.get("value", "")).strip()
 
-        last_error = None
-        for model_name in MODELS_TO_TRY:
+        if action == "open_app":
+            r = open_app(value)
+            responses.append(r or f"Tried to open {value}.")
+
+        elif action in ("search_youtube", "play_music"):
+            r = play_on_youtube(value)
+            set_last_topic("music", value)
+            responses.append(r)
+
+        elif action == "search_google":
+            url = f"https://www.google.com/search?q={urllib.parse.quote(value)}"
+            webbrowser.open(url)
+            responses.append(f"Searching Google for: {value}.")
+
+        elif action == "open_website":
+            r = open_website(value)
+            responses.append(r or f"Tried to open {value}.")
+
+        elif action == "set_volume":
+            val = value.lower()
+            if val == "up":
+                volume_up(5); responses.append("Volume increased.")
+            elif val == "down":
+                volume_down(5); responses.append("Volume decreased.")
+            elif val == "mute":
+                volume_mute(); responses.append("Volume muted.")
+            else:
+                try:
+                    lvl = int(val)
+                    volume_down(50)
+                    volume_up(max(0, lvl // 2))
+                    responses.append(f"Volume set to approximately {lvl} percent.")
+                except:
+                    responses.append("Volume adjusted.")
+
+        elif action == "set_brightness":
+            val = value.lower()
+            if val == "up":
+                cur = get_brightness()
+                new = min(100, (cur if cur >= 0 else 60) + 20)
+                set_brightness(new); responses.append(f"Brightness increased to {new} percent.")
+            elif val == "down":
+                cur = get_brightness()
+                new = max(10, (cur if cur >= 0 else 60) - 20)
+                set_brightness(new); responses.append(f"Brightness decreased to {new} percent.")
+            else:
+                try:
+                    lvl = int(val)
+                    set_brightness(lvl)
+                    responses.append(f"Brightness set to {lvl} percent.")
+                except:
+                    responses.append("Brightness adjusted.")
+
+        elif action == "add_task":
+            r = handle_tasks(f"add task {value}")
+            responses.append(r or f"Task added: {value}.")
+
+        elif action == "get_weather":
             try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=_memory[-MAX_MEMORY_TURNS:],
-                    config={
-                        "system_instruction": system_instruction,
-                        "max_output_tokens": 500,
-                        "temperature": 0.7,
-                    }
-                )
-                reply = response.text.strip()
-                _memory.append({"role": "model", "parts": [{"text": reply}]})
-                _gemini_failed_count = 0
-                return reply
-            except Exception as e:
-                last_error = str(e)
-                # Rate limited — don't bother trying other models
-                if "429" in last_error or "RESOURCE_EXHAUSTED" in last_error:
-                    _gemini_failed_count = 3  # Immediately trigger cooldown
-                    _gemini_last_fail_time = time.time()
-                    _memory.pop()
-                    print(f"   ⚠️  Gemini API rate limited. Using offline brain for {GEMINI_COOLDOWN // 60} minutes.")
-                    return smart_offline_response(command)
-                # Model not found — try next model
-                elif "404" in last_error or "NOT_FOUND" in last_error:
-                    print(f"   ⚠️  Model {model_name} not found, trying next...")
-                    continue
+                import requests
+                geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(value)}&count=1&language=en&format=json"
+                geo_data = requests.get(geo_url).json()
+                if "results" in geo_data and len(geo_data["results"]) > 0:
+                    lat = geo_data["results"][0]["latitude"]
+                    lon = geo_data["results"][0]["longitude"]
+                    city_name = geo_data["results"][0]["name"]
+                    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+                    w_data = requests.get(weather_url).json()
+                    current = w_data.get("current_weather", {})
+                    temp = current.get("temperature", "unknown")
+                    wind = current.get("windspeed", "unknown")
+                    result = f"The current weather in {city_name} is {temp}°C with a wind speed of {wind} km/h."
                 else:
-                    break
-
-        _gemini_failed_count += 1
-        _gemini_last_fail_time = time.time()
-        _memory.pop()
-        print(f"   ⚠️  Gemini AI unavailable — using offline brain. (Error: {last_error[:80] if last_error else 'unknown'})")
-        return smart_offline_response(command)
-
-    except Exception as e:
-        _gemini_failed_count += 1
-        _gemini_last_fail_time = time.time()
-        print(f"   ⚠️  Gemini AI unavailable — using offline brain. (Error: {str(e)[:80]})")
-        return smart_offline_response(command)
-
-
-# ── OpenRouter AI Response ────────────────────────────
-# Free models to try in order (auto-router first, then specific free models)
-OPENROUTER_MODELS = [
-    "google/gemma-3n-e4b-it:free",             # Google Gemma 3n (fast, reliable)
-    "arcee-ai/trinity-large-preview:free",      # Arcee Trinity Large (smart, detailed)
-]
-
-def _openrouter_response(command: str) -> str:
-    """Send command to OpenRouter API with model fallback chain."""
-    try:
-        import requests as req
-
-        _memory.append({"role": "user", "parts": [{"text": command}]})
-
-        # Convert memory to OpenAI format
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are MAZE, an advanced AI assistant. You are professional, sharp, and efficient. "
-                    "Keep responses concise — 3-5 sentences. No markdown or formatting. "
-                    "Your responses will be spoken aloud, so keep them natural and conversational."
-                )
-            }
-        ]
-        for m in _memory[-MAX_MEMORY_TURNS:]:
-            role = "assistant" if m["role"] == "model" else "user"
-            text = m["parts"][0]["text"] if isinstance(m["parts"], list) else str(m["parts"])
-            messages.append({"role": role, "content": text})
-
-        last_error = None
-        for model_name in OPENROUTER_MODELS:
-            try:
-                response = req.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": model_name,
-                        "messages": messages,
-                        "max_tokens": 500,
-                        "temperature": 0.7,
-                    },
-                    timeout=15,
-                )
-
-                data = response.json()
-                if response.status_code == 200 and "choices" in data:
-                    reply = data["choices"][0]["message"]["content"].strip()
-                    _memory.append({"role": "model", "parts": [{"text": reply}]})
-                    return reply
-                else:
-                    last_error = data.get("error", {}).get("message", str(data))
-                    print(f"   ⚠️  Model {model_name} unavailable, trying next...")
-                    continue
+                    result = f"I couldn't find the city '{value}' to get the weather."
             except Exception as e:
-                last_error = str(e)
-                continue
+                result = f"There was an error fetching the weather: {e}"
+            responses.append(result)
 
-        # All models failed
-        _memory.pop()
-        print(f"   ⚠️  OpenRouter error: {str(last_error)[:80]}")
-        return smart_offline_response(command)
+        elif action == "take_note":
+            r = handle_notes(f"note down {value}")
+            responses.append(r or f"Noted: {value}.")
 
-    except Exception as e:
-        if _memory and _memory[-1].get("role") == "user":
-            _memory.pop()
-        print(f"   ⚠️  OpenRouter unavailable: {str(e)[:80]}")
-        return smart_offline_response(command)
+        elif action == "write_code":
+            r = handle_code_writing(f"write code for {value}")
+            responses.append(r or f"Working on code for: {value}.")
+
+        elif action == "call_person":
+            r = handle_calling(f"call {value}")
+            responses.append(r or f"Opening WhatsApp for {value}.")
+
+        elif action == "send_message":
+            r = handle_messaging(f"message {value} on whatsapp")
+            responses.append(r or f"Opening WhatsApp to message {value}.")
+
+        elif action == "find_internship":
+            r = handle_internship(f"find internship {value}")
+            responses.append(r or f"Searching internships for: {value}.")
+
+        elif action == "find_file":
+            r = find_file(value)
+            responses.append(r)
+
+        elif action == "chat":
+            memory = get_memory()
+            user_facts = get_user_profile()
+            r = ollama_chat(value or original_command, memory, user_facts)
+            responses.append(r)
+
+        else:
+            r = smart_offline_response(original_command)
+            responses.append(r)
+            break
+
+    return " ".join(responses) if responses else smart_offline_response(original_command)
 
 
-# ── Action Handler (runs commands that DO things) ─────
+# ── Action Handler ───────────────────────────────────
+
 def _try_actions(command: str) -> str:
     """Try to execute actionable commands (apps, websites, music, tasks, etc.).
     Returns response if an action was taken, None if no action matched."""
-    cmd = _normalize_command(command)
+    cmd = normalize_command(command)
+
+    # ── Follow-up Awareness ──
+    # If the user says something vague, check if it relates to last topic
+    last_topic, last_query = get_last_topic()
+    if last_topic == "music" and len(cmd.split()) <= 4:
+        music_followups = ["something", "more", "another", "different", "similar",
+                           "energetic", "chill", "loud", "soft", "happy", "sad"]
+        if any(w in cmd for w in music_followups):
+            new_query = f"{last_query} {cmd}" if last_query else cmd
+            result = play_on_youtube(new_query)
+            if result:
+                set_last_topic("music", new_query)
+                return result
+
+    # ── Remember / Memory ──
+    if contains_any(cmd, ["remember that", "remember", "memorize that", "memorize", "note that"]):
+        if cmd.strip().startswith("remember") or cmd.strip().startswith("memorize") or cmd.strip().startswith("note that"):
+            result = handle_remember(cmd)
+            if result:
+                return result
+
+    # ── Internship Finder ──
+    if contains_any(cmd, ["internship", "intern"]):
+        result = handle_internship(cmd)
+        if result:
+            return result
+
+    # ── Find file on system ──
+    if contains_any(cmd, ["find file", "locate file", "where is", "find my"]):
+        query = cmd
+        for remove in ["find file", "locate file", "where is", "find my", "find", "locate",
+                        "the file", "file", "please", "for me"]:
+            query = query.replace(remove, " ")
+        query = " ".join(query.split()).strip()
+        if query:
+            return find_file(query)
 
     # ── Media Controls (HIGHEST PRIORITY) ──
-    # Must come before search/play so "next"/"previous" don't get misrouted
-    result = _handle_media_control(cmd)
+    result = handle_media_control(cmd)
     if result:
+        set_last_topic("music")
         return result
 
-    # ── YouTube / Play ───────────────────────
-    if "youtube" in cmd or _has_word(cmd, ["play"]):
-        result = _handle_search(cmd)
+    # ── Messaging & Calling ──
+    is_call_cmd = has_word(cmd, ["call", "dial", "phone"])
+    is_msg_cmd = contains_any(cmd, ["send message", "message", "text ", "dm "]) or \
+                 (has_word(cmd, ["find"]) and contains_any(cmd, ["whatsapp", "instagram"]))
+
+    if is_call_cmd and not contains_any(cmd, ["call of", "call it", "call this"]):
+        result = handle_calling(cmd)
         if result:
             return result
 
-    # ── Open commands ───────────────────────
-    if _contains_any(cmd, ["open", "launch", "start", "run"]):
-        # Check for web searches first
-        result = _handle_search(cmd)
+    if is_msg_cmd:
+        result = handle_messaging(cmd)
         if result:
             return result
-        # Then websites
-        result = _open_website(cmd)
+
+    # ── YouTube / Play ──
+    if "youtube" in cmd or has_word(cmd, ["play"]):
+        result = handle_search(cmd)
+        if result:
+            set_last_topic("music", cmd)
+            return result
+
+    # ── Open commands ──
+    if contains_any(cmd, ["open", "launch", "start", "run"]):
+        result = handle_search(cmd)
         if result:
             return result
-        # Then apps
+        result = open_website(cmd)
+        if result:
+            return result
         app_query = cmd
         for remove in ["open", "launch", "start", "run"]:
             app_query = app_query.replace(remove, " ")
         app_query = app_query.strip()
-        result = _open_app(app_query)
+        result = open_app(app_query)
         if result:
             return result
 
-    # ── Direct app name (without "open") ────
+    # ── Direct app name ──
     for app_name in list(APPS.keys()) + list(BROWSER_APPS.keys()):
         if app_name in cmd and len(cmd.split()) <= 3:
-            result = _open_app(cmd)
+            result = open_app(cmd)
             if result:
                 return result
 
-    # ── Web searches ────────────────────────
-    if _contains_any(cmd, ["search", "google", "look up", "find", "wikipedia", "wiki"]):
-        result = _handle_search(cmd)
+    # ── Web searches ──
+    if contains_any(cmd, ["search", "google", "look up", "find", "wikipedia", "wiki"]):
+        result = handle_search(cmd)
         if result:
             return result
 
-    # ── Website opening ─────────────────────
-    result = _open_website(cmd)
+    # ── Website opening ──
+    result = open_website(cmd)
     if result:
         return result
 
-    # ── Task management ─────────────────────
-    result = _handle_tasks(cmd)
+    # ── Task management ──
+    result = handle_tasks(cmd)
     if result:
         return result
 
-    # ── Note-taking / Type message ───────────
-    result = _handle_notes(cmd)
+    # ── Notes ──
+    result = handle_notes(cmd)
     if result:
         return result
 
-    # ── System control (volume/brightness) ───
-    result = _handle_system_control(cmd)
+    # ── System control ──
+    result = handle_system_control(cmd)
     if result:
         return result
 
-    # ── Code writing ─────────────────────────
-    # Flexible matching: if command has an action word + "code"/"program"/"script"
+    # ── Code writing ──
     _code_actions = {"write", "create", "make", "generate", "build", "code"}
     _code_nouns = {"code", "program", "script"}
     cmd_words = set(cmd.split())
     has_code_action = bool(cmd_words & _code_actions)
     has_code_noun = bool(cmd_words & _code_nouns)
-    # Also match exact phrases
-    has_exact = _contains_any(cmd, ["write code", "create code", "code for", "generate code",
-                                     "make code", "write program", "create program",
-                                     "write script", "create script"])
-    # Trigger if (action + noun) OR exact phrase, but NOT "vs code" alone / "open code"
+    has_exact = contains_any(cmd, ["write code", "create code", "code for", "generate code",
+                                    "make code", "write program", "create program",
+                                    "write script", "create script"])
     is_code_request = (has_exact or (has_code_action and has_code_noun)) \
                        and not (cmd.strip() in ["vs code", "open vs code", "open code", "launch code"])
     if is_code_request:
-        result = _handle_code_writing(cmd)
+        result = handle_code_writing(cmd)
         if result:
             return result
 
-    # ── Math ────────────────────────────────
-    if _contains_any(cmd, ["calculate", "what is", "what's", "how much",
-                                "plus", "minus", "times", "divided", "multiply",
-                                "add", "subtract", "solve", " x "]):
-        result = _handle_math(cmd)
+    # ── Math ──
+    if contains_any(cmd, ["calculate", "what is", "what's", "how much",
+                           "plus", "minus", "times", "divided", "multiply",
+                           "add", "subtract", "solve", " x "]):
+        result = handle_math(cmd)
         if result:
             return result
 
@@ -1299,45 +529,86 @@ def _try_actions(command: str) -> str:
     return None
 
 
-# ── Main Router ───────────────────────────────────────
-def get_response(command: str) -> str:
+# ── Main Router ──────────────────────────────────────
+
+def get_response(command: str, emotion: str = "calm") -> str:
     """Try actions first (they actually DO things), then use AI for conversation.
-    AI Priority: Gemini → OpenRouter → Offline Brain."""
-    global _gemini_failed_count
+    AI Priority: Ollama (local) → Gemini → OpenRouter → Offline Brain.
+
+    Args:
+        command: The user's command/question.
+        emotion: Detected emotion from NLP (used in AI system prompt).
+    """
+    # Build emotion context for AI
+    emotion_context = ""
+    if emotion and emotion != "calm":
+        emotion_map = {
+            "happy": "happy and excited",
+            "sad": "sad or down — be extra supportive and encouraging",
+            "angry": "frustrated — be calm, patient, and helpful",
+            "excited": "excited and energetic — match their enthusiasm",
+            "fearful": "anxious or worried — be reassuring",
+        }
+        emotion_context = emotion_map.get(emotion, emotion)
 
     # ── STEP 1: Always try actionable commands first ──
-    # These actually open apps, play music, manage tasks, etc.
     action_result = _try_actions(command)
     if action_result:
+        # Store in memory
+        add_exchange(command, action_result)
+        # Auto-summarize if needed
+        auto_summarize(get_memory(), get_exchange_count())
         return action_result
 
     # ── STEP 2: No action matched → use AI for conversation/questions ──
-    # If Gemini has been failing, check if cooldown period has passed
-    gemini_on_cooldown = False
-    if _gemini_failed_count >= 3:
-        elapsed = time.time() - _gemini_last_fail_time
-        remaining = GEMINI_COOLDOWN - elapsed
-        if remaining <= 0:
-            _gemini_failed_count = 0  # Reset — give Gemini another chance
-            print("   🔄 Retrying Gemini AI connection...")
-        else:
-            gemini_on_cooldown = True
-            mins = int(remaining // 60)
-            secs = int(remaining % 60)
-            # Only show cooldown message occasionally (not every single command)
-            if elapsed < 5:  # Just entered cooldown
-                print(f"   ⏳ Gemini on cooldown ({mins}m {secs}s). Trying OpenRouter...")
+    memory = get_memory()
+    user_facts = get_user_profile()
+    long_term_context = get_context_for_ai()
+    combined_facts = user_facts
+    if long_term_context:
+        combined_facts = f"{user_facts}\n\n{long_term_context}" if user_facts else long_term_context
 
-    # Try Gemini first
-    if AI_PROVIDER == "gemini" and GEMINI_API_KEY and _gemini_failed_count < 3:
-        return _gemini_response(command)
+    # ── Priority 1: Ollama (fully local) ──
+    if AI_PROVIDER == "ollama":
+        try:
+            # Try intent detection first
+            steps = get_intent(command)
+            if steps:
+                if len(steps) == 1 and steps[0].get("action") == "chat":
+                    reply = ollama_chat(command, memory, combined_facts, emotion_context)
+                else:
+                    reply = _handle_intent_steps(steps, command)
+            else:
+                reply = ollama_chat(command, memory, combined_facts, emotion_context)
 
-    # Gemini unavailable → try OpenRouter as fallback
-    if OPENROUTER_API_KEY:
-        if gemini_on_cooldown:
+            add_exchange(command, reply)
+            auto_summarize(get_memory(), get_exchange_count())
+            return reply
+        except Exception as e:
+            err = str(e)
+            if any(k in err.lower() for k in ["connectionerror", "connection refused",
+                                               "connect", "timeout", "refused"]):
+                print("   ⚠️  Ollama not running — falling back to cloud AI...")
+            else:
+                print(f"   ⚠️  Ollama error: {err[:80]}")
+
+    # ── Priority 2: Google Gemini ──
+    if gemini_available() and not gemini_on_cooldown():
+        reply = gemini_response(command, memory, save_memory,
+                                combined_facts, emotion_context, smart_offline_response)
+        auto_summarize(get_memory(), get_exchange_count())
+        return reply
+
+    # ── Priority 3: OpenRouter ──
+    if openrouter_available():
+        if gemini_on_cooldown():
             print("   🔄 Using OpenRouter AI (Gemini on cooldown)...")
-        return _openrouter_response(command)
+        reply = openrouter_response(command, memory, save_memory,
+                                    combined_facts, emotion_context, smart_offline_response)
+        auto_summarize(get_memory(), get_exchange_count())
+        return reply
 
-    # No AI available → offline brain
-    return smart_offline_response(command)
-
+    # ── Priority 4: Smart offline brain ──
+    reply = smart_offline_response(command)
+    add_exchange(command, reply)
+    return reply
