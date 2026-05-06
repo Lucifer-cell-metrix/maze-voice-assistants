@@ -19,7 +19,7 @@ from config import AI_PROVIDER, GEMINI_API_KEY, OPENROUTER_API_KEY
 from assistant.actions.helpers import contains_any, has_word, normalize_command
 from assistant.actions.apps import open_app, find_file, APPS, BROWSER_APPS
 from assistant.actions.media import handle_media_control, play_on_youtube, _yt_playlist, _yt_current_idx
-from assistant.actions.web import handle_search, open_website
+from assistant.actions.web import open_website, handle_search, web_search, fetch_webpage
 from assistant.actions.tasks import handle_tasks
 from assistant.actions.notes import handle_notes
 from assistant.actions.system import handle_system_control, volume_up, volume_down, volume_mute, get_brightness, set_brightness
@@ -135,6 +135,21 @@ def smart_offline_response(command: str) -> str:
         if result:
             set_last_topic("music", command)
             return result
+
+    # ── Web Search & Reading ──
+    if command.startswith("fetch data from") or command.startswith("read "):
+        # Extract URL
+        words = command.split()
+        url = next((w for w in words if w.startswith("http")), None)
+        if url:
+            result = fetch_webpage(url)
+            return f"Here's what I found: {result[:500]}"
+        return "Please provide a valid URL"
+
+    if "search" in command or "what is" in command or "who is" in command or "latest" in command:
+        # Avoid intercepting Wikipedia commands handled by handle_search
+        if "wikipedia" not in command and "wiki" not in command:
+            return web_search(command)
 
     # ── Open commands ──
     if contains_any(command, ["open", "launch", "start", "run"]):
@@ -433,7 +448,7 @@ def _try_actions(command: str) -> str:
     # ── Messaging & Calling ──
     is_call_cmd = has_word(cmd, ["call", "dial", "phone"])
     is_msg_cmd = contains_any(cmd, ["send message", "message", "text ", "dm "]) or \
-                 (has_word(cmd, ["find"]) and contains_any(cmd, ["whatsapp", "instagram"]))
+                 (contains_any(cmd, ["find", "send", "ping"]) and contains_any(cmd, ["whatsapp", "instagram", "ig", "telegram"]))
 
     if is_call_cmd and not contains_any(cmd, ["call of", "call it", "call this"]):
         result = handle_calling(cmd)
@@ -594,6 +609,17 @@ def get_response(command: str, emotion: str = "calm") -> str:
 
     # ── Priority 2: Google Gemini ──
     if gemini_available() and not gemini_on_cooldown():
+        from assistant.ai_providers.gemini import get_gemini_intent
+        steps = get_gemini_intent(command)
+        if steps:
+            if len(steps) == 1 and steps[0].get("action") == "chat":
+                pass # fall through to conversational reply
+            else:
+                reply = _handle_intent_steps(steps, command)
+                add_exchange(command, reply)
+                auto_summarize(get_memory(), get_exchange_count())
+                return reply
+
         reply = gemini_response(command, memory, save_memory,
                                 combined_facts, emotion_context, smart_offline_response)
         auto_summarize(get_memory(), get_exchange_count())

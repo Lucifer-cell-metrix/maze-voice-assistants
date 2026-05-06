@@ -112,8 +112,6 @@ def speak(text: str, wait=False, emotion: str = "calm"):
     _last_response_length = len(text)
 
     # Notify avatar
-    if emotion and emotion != "calm":
-
     # Stop any ongoing speech first
     stop_speaking()
 

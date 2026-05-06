@@ -28,65 +28,55 @@ def ask_llm(prompt: str, timeout: int = 30) -> str:
 
 
 def get_intent(user_input: str) -> list:
-    """Ask Ollama to convert user input into a structured list of JSON action steps.
-    Returns a list of dicts like [{"action": "...", "value": "..."}].
-    Falls back to empty list on any parse failure."""
-    prompt = (
-        "You are MAZE, an AI assistant controller running on the user's PC.\n\n"
-        "Convert the user input into a JSON list of steps to execute.\n\n"
-        "Available actions (use ONLY these):\n"
-        "- open_app(name)          open apps like chrome, notepad, vscode, calculator\n"
-        "- search_youtube(query)   search or play something on YouTube\n"
-        "- search_google(query)    search on Google\n"
-        "- open_website(name)      open sites like github, gmail, spotify\n"
-        "- play_music(query)       play music or song on YouTube\n"
-        "- set_volume(level)       level = up, down, mute, or a number 0-100\n"
-        "- set_brightness(level)   level = up, down, or a number 0-100\n"
-        "- add_task(text)          add a task to the task list\n"
-        "- take_note(text)         save a note\n"
-        "- write_code(description) generate code for a task\n"
-        "- get_weather(city)       get real-time weather for a city\n"
-        "- call_person(name)       call someone (opens WhatsApp)\n"
-        "- send_message(name)      message someone (opens WhatsApp/Instagram)\n"
-        "- find_internship(keyword) find internships on Internshala\n"
-        "- find_file(name)         find and open a file on the computer\n"
-        "- chat(text)              answer a question or have a conversation (fallback)\n\n"
-        f"User input: \"{user_input}\"\n\n"
-        "Rules:\n"
-        "- Return ONLY a valid JSON array, nothing else.\n"
-        "- Use as many steps as needed.\n"
-        "- For conversational or factual questions, use a single chat action.\n\n"
-        "Example for open chrome and search python tutorials:\n"
-        '[{"action": "open_app", "value": "chrome"}, {"action": "search_google", "value": "python tutorials"}]\n\n'
-        "Return JSON array:"
-    )
+    """Ask Ollama to convert user input into a structured list of JSON action steps using native Tool Calling."""
+    import requests as req
+    from assistant.ai_providers.tools_schema import OLLAMA_TOOLS
+
+    messages = [
+        {"role": "system", "content": "You are MAZE, an AI assistant controller. Use the provided tools to execute the user's command. If the user is just chatting or asking a factual question, use the chat tool."},
+        {"role": "user", "content": user_input}
+    ]
+
+    url = f"{OLLAMA_URL}/api/chat"
+    data = {
+        "model": OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,
+        "tools": OLLAMA_TOOLS
+    }
+
     try:
-        raw = ask_llm(prompt, timeout=20)
-
-        # Cleanup markdown formatting
-        if "```json" in raw:
-            raw = raw.split("```json")[-1].split("```")[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```")[1].strip()
-
-        data = None
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            match = re.search(r'\[\s*\{.*?\}\s*\]', raw, re.DOTALL)
-            if match:
-                data = json.loads(match.group())
-
-        if isinstance(data, dict):
-            data = [data]
-
-        if isinstance(data, list):
-            valid_steps = [item for item in data if isinstance(item, dict)]
-            if valid_steps:
-                return valid_steps
+        response = req.post(url, json=data, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        
+        message = result.get("message", {})
+        tool_calls = message.get("tool_calls", [])
+        
+        steps = []
+        if tool_calls:
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                action = func.get("name", "")
+                args = func.get("arguments", {})
+                
+                # Map to 'value' for brain router
+                value = ""
+                for k, v in args.items():
+                    if k in ["name", "query", "text", "level", "keyword", "description"]:
+                        value = v
+                        break
+                if not value and args:
+                    value = list(args.values())[0]
+                    
+                steps.append({"action": action, "value": value})
+            return steps
+            
+        if message.get("content"):
+             return [{"action": "chat", "value": message["content"]}]
 
     except Exception as e:
-        print(f"   ⚠️  Intent parse error: {e}")
+        print(f"   ⚠️  Ollama Intent parse error: {e}")
     return []
 
 

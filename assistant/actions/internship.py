@@ -134,7 +134,7 @@ def format_internships_voice(results: list) -> str:
     parts = [f"I found {len(results)} internships."]
     for i, r in enumerate(results, 1):
         parts.append(f"Number {i}: {r['title']} at {r['company']}, stipend {r['stipend']}.")
-    return " ".join(parts)
+    return "\n".join(parts)
 
 
 def handle_internship(command: str) -> str:
@@ -150,12 +150,15 @@ def handle_internship(command: str) -> str:
         return None
 
     # Extract keyword
-    keyword = command
-    for remove in ["find", "search", "get", "show", "look", "for", "me",
-                    "internship", "internships", "intern", "interns",
-                    "on", "internshala", "please", "can you", "could you"]:
-        keyword = keyword.replace(remove, " ")
-    keyword = " ".join(keyword.split()).strip()
+    keyword = command.lower()
+    for phrase in ["find internship for", 
+                   "finder internship for",
+                   "find internship in",
+                   "search internship",
+                   "find internships",
+                   "search internships",
+                   "find internship"]:
+        keyword = keyword.replace(phrase, "").strip()
 
     # Check for "remote"
     remote = False
@@ -163,8 +166,7 @@ def handle_internship(command: str) -> str:
         remote = True
         keyword = keyword.replace("remote", "").replace("work from home", "").strip()
 
-    if not keyword:
-        keyword = "python"  # Default keyword
+    keyword = keyword or "cybersecurity"
 
     print(f"   🔍 Searching internships for: {keyword} {'(remote)' if remote else ''}")
     results = find_internships(keyword, remote=remote)

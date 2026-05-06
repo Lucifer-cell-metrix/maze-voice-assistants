@@ -21,6 +21,67 @@ MODELS_TO_TRY = [
     "gemini-2.0-flash-lite",
 ]
 
+def get_gemini_intent(command: str) -> list:
+    """Ask Gemini to convert user input into a structured list of JSON action steps using Function Calling."""
+    global _gemini_failed_count, _gemini_last_fail_time
+    try:
+        from google import genai
+        from google.genai import types
+        from assistant.ai_providers.tools_schema import GEMINI_TOOLS
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        
+        system_instruction = (
+            "You are MAZE, an AI assistant controller. You have tools available to control the user's PC. "
+            "Call the appropriate functions based on the user's command. "
+            "If the user is just chatting or asking a factual question, call the 'chat' tool. "
+            "You can call multiple tools if needed."
+        )
+
+        for model_name in MODELS_TO_TRY:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=command,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.0,
+                        tools=GEMINI_TOOLS
+                    )
+                )
+
+                steps = []
+                if response.function_calls:
+                    for fc in response.function_calls:
+                        action = fc.name
+                        args = fc.args
+                        # Extract the primary argument as the 'value' for our brain router
+                        value = ""
+                        for k, v in args.items():
+                            if k in ["name", "query", "text", "level", "keyword", "description"]:
+                                value = v
+                                break
+                        if not value and args: # Fallback
+                            value = list(args.values())[0]
+
+                        steps.append({"action": action, "value": value})
+                    return steps
+
+                # If no function calls, maybe it just replied text.
+                if response.text:
+                    return [{"action": "chat", "value": response.text}]
+                
+                return []
+            except Exception as e:
+                if "404" in str(e) or "NOT_FOUND" in str(e):
+                    continue
+                else:
+                    break
+
+    except Exception as e:
+        print(f"   ⚠️  Gemini Intent parse error: {e}")
+    return []
+
 
 def is_on_cooldown() -> bool:
     """Check if Gemini is on cooldown from rate limiting."""

@@ -6,6 +6,9 @@ Handles Google, YouTube, Wikipedia searches and opening known websites.
 import os
 import webbrowser
 import urllib.parse
+import requests
+from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
 from assistant.actions.helpers import contains_any, has_word, extract_query
 from assistant.actions.media import play_on_youtube, YT_REMOVE_WORDS
 
@@ -142,3 +145,36 @@ def handle_search(command: str) -> str:
         return "What would you like me to search for?"
 
     return None
+
+def web_search(query):
+    """Search web and return summary"""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=3))
+            if results:
+                return results[0]['body']
+            return "No results found"
+    except Exception as e:
+        return f"Search failed: {str(e)}"
+
+def fetch_webpage(url):
+    """Fetch and read any webpage"""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, 
+                               headers=headers, 
+                               timeout=10)
+        soup = BeautifulSoup(response.content, 
+                            "html.parser")
+        
+        # Remove scripts and styles
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+            
+        text = soup.get_text(separator=' ')
+        # Clean whitespace
+        lines = [l.strip() for l in text.splitlines() 
+                 if l.strip()]
+        return ' '.join(lines)[:1000]
+    except Exception as e:
+        return f"Could not fetch page: {str(e)}"

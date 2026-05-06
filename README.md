@@ -7,11 +7,12 @@ MAZE is a fast, lightweight, and completely local-first AI voice assistant desig
 ## ✨ Features
 
 - **⚡ Instant Desktop Control**: Launch applications, find files across your drives, adjust volume/brightness, and control media playback using quick commands.
-- **🧠 Hybrid AI Brain**: Uses a fast local model via Ollama for intent parsing and privacy, with fallback to Google Gemini or OpenRouter for complex factual or conversational queries.
-- **💬 Seamless Communication**: Integrates with WhatsApp and Instagram for hands-free messaging and calling.
-- **📱 Telegram Remote**: Control MAZE directly from your phone using the Telegram bot (`/internship` command included!).
+- **🧠 Hybrid AI Brain & Function Calling**: Uses native AI Function Calling (Tool Use) for flawless execution. Primary intent routing uses local Mistral (via Ollama), with fallback to Google Gemini's lightning-fast models for complex reasoning.
+- **💬 Hands-Free WhatsApp & Instagram**: Natively sends WhatsApp messages fully autonomously using `pywhatkit` — no need to click send! Just add your contacts to `memory/contacts.json`.
+- **🌐 Live Web Search**: MAZE natively integrates with DuckDuckGo to answer "who is", "what is", and "latest" queries in real time. It can also fetch and summarize any live URL you give it.
+- **📱 Telegram Remote**: Control MAZE directly from your phone using the Telegram bot. Tell it to open apps on your desktop remotely!
 - **💼 Internship Finder**: Find the best internships from Internshala matching your criteria (e.g. "Find remote Python internships").
-- **🧩 Modular Architecture**: Highly extensible codebase separated into actions (`apps`, `media`, `web`, `tasks`, etc.) and AI providers (`ollama`, `gemini`, `openrouter`).
+- **🧩 Modular Architecture**: Highly extensible codebase separated into action routers and AI provider plugins.
 - **📝 Persistent Smart Memory**: Automatically summarizes conversations every 20 turns and remembers personal facts to build context across reboots.
 
 ---
@@ -43,12 +44,19 @@ GEMINI_API_KEY=your_gemini_key
 
 # Telegram Bot (Remote Control)
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-
-# OpenRouter (Optional Fallback)
-OPENROUTER_API_KEY=your_openrouter_key
 ```
 
-### 4. Running MAZE
+### 4. Setup Contacts
+To use the automatic WhatsApp messaging feature, add your friends' numbers to `memory/contacts.json`:
+```json
+{
+    "whatsapp": {
+        "lucifer": "+919876543210"
+    }
+}
+```
+
+### 5. Running MAZE
 You can start MAZE using the provided batch script:
 ```cmd
 start_maze.bat
@@ -57,13 +65,6 @@ Or directly via Python:
 ```cmd
 venv\Scripts\python.exe main.py
 ```
-
-### 5. Auto-Start on Windows Boot
-Want MAZE to be ready as soon as you turn on your PC? Run the setup script:
-```cmd
-venv\Scripts\python.exe setup_autostart.py --enable
-```
-*(To disable: `setup_autostart.py --disable`)*
 
 ---
 
@@ -74,23 +75,16 @@ Here are some things you can say to MAZE:
 - **Apps & Files**: *"Open VS Code"*, *"Find file report.pdf"*, *"Open YouTube"*
 - **Media**: *"Play lo-fi hip hop"*, *"Next track"*, *"Pause music"*
 - **System**: *"Volume up"*, *"Set brightness to 50"*, *"Mute"*
-- **Tasks & Notes**: *"Add task finish homework"*, *"Note down my meeting is at 5 PM"*
-- **Communication**: *"Message John on WhatsApp"*
+- **Web Intelligence**: *"Search the latest cybersecurity news"*, *"Read https://example.com"*
+- **Communication**: *"Send hello to Lucifer on WhatsApp"*
 - **Jobs**: *"Find remote cybersecurity internships"*
 - **Coding**: *"Write a Python script for a tic-tac-toe game"*
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture & Documentation
 
-MAZE is designed to be highly modular. The main command flow:
-1. `main.py` captures voice/keyboard input.
-2. `assistant/brain.py` routes the command.
-3. If it's an actionable command, it routes to `assistant/actions/`.
-4. If it's a conversational/knowledge query, it goes to `assistant/ai_providers/` (Ollama -> Gemini -> OpenRouter).
-5. All context is saved and summarized in `assistant/memory_module/`.
-
----
+For a deep dive into how the hybrid engine, intent router, and memory systems work, see the [MAZE Documentation](HOW_TO_USE_MAZE.md).
 
 ## 🤝 Contributing
 Contributions are welcome! If you have a cool action module you want to add, feel free to submit a PR.

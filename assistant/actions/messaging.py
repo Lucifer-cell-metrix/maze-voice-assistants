@@ -8,7 +8,7 @@ from assistant.actions.helpers import contains_any, has_word
 
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from config import CONTACTS, INSTAGRAM_USERS
+import json
 
 
 def handle_messaging(command: str) -> str:
@@ -25,21 +25,50 @@ def handle_messaging(command: str) -> str:
     target_phone = None
     target_username = None
 
+    # Load contacts from JSON
+    contacts_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "memory", "contacts.json")
+    try:
+        with open(contacts_file, "r", encoding="utf-8") as f:
+            contacts_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        contacts_data = {"whatsapp": {}, "instagram": {}}
+
+    whatsapp_contacts = contacts_data.get("whatsapp", {})
+    instagram_contacts = contacts_data.get("instagram", {})
+
     if platform == "whatsapp":
-        for name in CONTACTS:
+        for name in whatsapp_contacts:
             if name in cmd:
                 target_person = name
-                target_phone = CONTACTS[name]
+                target_phone = whatsapp_contacts[name]
                 break
     if platform == "instagram" or (not target_person and "instagram" in cmd):
         platform = "instagram"
-        for name in INSTAGRAM_USERS:
+        for name in instagram_contacts:
             if name in cmd:
                 target_person = name
-                target_username = INSTAGRAM_USERS[name]
+                target_username = instagram_contacts[name]
                 break
 
-    # If not in contacts, extract name from command
+    # Extract message content
+    message = ""
+    if cmd.startswith("send ") and " to " in cmd:
+        part1 = cmd.split("send ", 1)[1]
+        msg_part = part1.split(" to ")[0]
+        message = msg_part.strip()
+        if not target_person:
+            person_part = part1.split(" to ", 1)[1]
+            for r in ["on whatsapp", "on instagram", "on ig", "whatsapp", "instagram", "please"]:
+                person_part = person_part.replace(r, " ")
+            target_person = " ".join(person_part.split()).strip()
+    elif "saying" in cmd:
+        message = cmd.split("saying")[1].strip()
+    elif "that" in cmd and not cmd.startswith("that"):
+        parts = cmd.split("that")
+        if len(parts) > 1:
+            message = parts[-1].strip()
+
+    # If not in contacts and not extracted via "send X to Y", extract name from command
     if not target_person:
         name = cmd
         for remove in ["send message to", "send message", "message to", "message",
@@ -53,26 +82,37 @@ def handle_messaging(command: str) -> str:
     if not target_person:
         return f"Who do you want to message on {platform.title()}?"
 
-    # Extract message content
-    message = ""
-    if "saying" in cmd:
-        message = cmd.split("saying")[1].strip()
-    elif "that" in cmd and not cmd.startswith("that"):
-        parts = cmd.split("that")
-        if len(parts) > 1:
-            message = parts[-1].strip()
-
     # Execute — open the platform to the person
     if platform == "whatsapp":
-        if target_phone:
-            url = f"https://wa.me/{target_phone.replace('+', '')}"
-            if message:
-                url += f"?text={urllib.parse.quote(message)}"
-            webbrowser.open(url)
-            return f"Opening WhatsApp for {target_person.title()}. Send your message there."
+        if target_phone and message:
+            try:
+                import pywhatkit as kit
+                print(f"   ⏳ Sending WhatsApp message to {target_person.title()}...")
+                kit.sendwhatmsg_instantly(
+                    phone_no=target_phone,
+                    message=message,
+                    wait_time=15
+                )
+                return f"Message sent to {target_person.title()} on WhatsApp."
+            except ImportError:
+                encoded_msg = urllib.parse.quote(message)
+                phone = target_phone.replace('+', '')
+                url = f"https://web.whatsapp.com/send?phone={phone}&text={encoded_msg}"
+                webbrowser.open(url)
+                return f"WhatsApp opened with message ready to send to {target_person.title()}"
+            except Exception as e:
+                return f"Failed to send WhatsApp message: {str(e)[:50]}"
         else:
-            webbrowser.open("https://web.whatsapp.com")
-            return f"Opening WhatsApp. Search for '{target_person.title()}' in the search bar to find them."
+            encoded_msg = urllib.parse.quote(message) if message else ""
+            if target_phone:
+                phone = target_phone.replace('+', '')
+                url = f"https://web.whatsapp.com/send?phone={phone}&text={encoded_msg}"
+                webbrowser.open(url)
+                return f"Opening WhatsApp for {target_person.title()}."
+            else:
+                url = f"https://web.whatsapp.com/send?phone=&text={encoded_msg}"
+                webbrowser.open(url)
+                return f"I don't have a phone number for '{target_person.title()}' in contacts.json. Opening WhatsApp, please search for them manually to send the message."
 
     elif platform == "instagram":
         if target_username:
@@ -94,10 +134,20 @@ def handle_calling(command: str) -> str:
     target_person = None
     target_phone = None
 
-    for name in CONTACTS:
+    # Load contacts from JSON
+    contacts_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "memory", "contacts.json")
+    try:
+        with open(contacts_file, "r", encoding="utf-8") as f:
+            contacts_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        contacts_data = {"whatsapp": {}, "instagram": {}}
+
+    whatsapp_contacts = contacts_data.get("whatsapp", {})
+
+    for name in whatsapp_contacts:
         if name in cmd:
             target_person = name
-            target_phone = CONTACTS[name]
+            target_phone = whatsapp_contacts[name]
             break
 
     if not target_person:
@@ -111,7 +161,8 @@ def handle_calling(command: str) -> str:
         return "Who do you want to call?"
 
     if target_phone:
-        url = f"https://wa.me/{target_phone.replace('+', '')}"
+        phone = target_phone.replace('+', '')
+        url = f"https://web.whatsapp.com/send?phone={phone}"
         webbrowser.open(url)
         return f"Opening WhatsApp for {target_person.title()}. Tap the call button to start the call."
     else:

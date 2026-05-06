@@ -22,15 +22,8 @@ CONVERSATION_PAUSE_LONG = 3    # Pause after longer responses
 ENABLE_AVATAR = True           # Show floating anime avatar on screen
 
 # ── Contacts & Messaging ──────────────────────
-# Add phone numbers (with country code) for WhatsApp
-CONTACTS = {
-    "yashank": "+917990480791", # Example: Replace with actual number
-    "mom": "+917284965188",
-}
-# Add usernames for Instagram
-INSTAGRAM_USERS = {
-    "yashank": "yashan_ig", # Example: Replace with actual username
-}
+# Contacts have been moved to: memory/contacts.json
+# You can add phone numbers and instagram usernames there.
 
 # ── AI Brain Settings ─────────────────────────
 # Option 0: Ollama — LOCAL AI (NO internet, NO API key needed!)
